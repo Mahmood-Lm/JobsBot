@@ -1,0 +1,47 @@
+name: Deploy Bot UI to EC2
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "bot/**" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: linkedin-bot-v2
+          IMAGE_TAG: latest
+        run: |
+          cd bot
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: SSM Deploy to EC2
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          aws ssm send-command \
+            --region eu-central-1 \
+            --targets "Key=tag:Name,Values=TelegramBot-V2-Server" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "docker pull '$ECR_REGISTRY'/linkedin-bot-v2:latest",
+              "docker stop interactive_bot || true",
+              "docker rm interactive_bot || true",
+              "docker run -d --name interactive_bot --restart unless-stopped -e TELEGRAM_TOKEN='$TELEGRAM_TOKEN' '$ECR_REGISTRY'/linkedin-bot-v2:latest"
+            ]'

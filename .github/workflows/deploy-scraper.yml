@@ -1,0 +1,42 @@
+name: Deploy Scraper to Lambda
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "scraper/**" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: linkedin-scraper-v2
+          IMAGE_TAG: latest
+        run: |
+          cd scraper
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Update Lambda
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: linkedin-scraper-v2
+          IMAGE_TAG: latest
+        run: |
+          aws lambda update-function-code \
+            --region eu-central-1 \
+            --function-name linkedin-scraper-function-v2 \
+            --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG    
