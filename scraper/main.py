@@ -4,7 +4,7 @@ import config
 from scraper import get_jobs
 from telegram_bot import send_message
 
-# Initialize DynamoDB client
+# Initialize DynamoDB client and table reference
 dynamodb = boto3.resource('dynamodb', region_name='eu-central-1') 
 table = dynamodb.Table(config.DYNAMODB_TABLE)
 
