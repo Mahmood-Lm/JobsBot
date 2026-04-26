@@ -91,12 +91,15 @@ async def capture_freq(callback_query: types.CallbackQuery, state: FSMContext):
             'frequency_minutes': minutes,
             'last_scraped_timestamp': 0 # Setting this to 0 forces the Dispatcher to scrape it IMMEDIATELY
         })
-        await callback_query.message.answer(
+        
+        # EDIT the existing message instead of sending a new one!
+        await callback_query.message.edit_text(
             "✅ **Link Successfully Added!**\n\nThe cloud dispatcher will pick this up within the next 60 seconds and run your first scrape.", 
             parse_mode="Markdown"
         )
     except Exception as e:
-        await callback_query.message.answer(f"❌ Database error: {e}")
+        # Edit the message to show the error
+        await callback_query.message.edit_text(f"❌ Database error: {e}")
         
     await state.clear() # Clear the memory so the user can start over
     await callback_query.answer()
@@ -175,9 +178,9 @@ async def process_delete(callback_query: types.CallbackQuery):
         table.delete_item(
             Key={'subscription_id': sub_id}
         )
-        await callback_query.message.answer("✅ Subscription successfully deleted! I will no longer scrape this link.")
+        await callback_query.message.edit_text("✅ Subscription successfully deleted! I will no longer scrape this link.")
     except Exception as e:
-        await callback_query.message.answer(f"❌ Error deleting link: {e}")
+        await callback_query.message.edit_text(f"❌ Error deleting link: {e}")
         
     await callback_query.answer()
 
