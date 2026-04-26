@@ -32,6 +32,7 @@ async def process_scrape_click(callback_query: types.CallbackQuery):
         await callback_query.message.answer(f"❌ Error starting scraper: {e}")
     await callback_query.answer()
 
+# Main entry point to start the bot
 async def main():
     print("Bot Brain is waking up...")
     await dp.start_polling(bot)
