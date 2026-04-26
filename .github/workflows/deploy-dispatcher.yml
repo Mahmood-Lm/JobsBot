@@ -1,0 +1,30 @@
+name: Deploy Dispatcher to Lambda
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'dispatcher/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Zip and Update Lambda
+        run: |
+          cd dispatcher
+          zip -r deployment.zip main.py
+          aws lambda update-function-code \
+            --region eu-central-1 \
+            --function-name linkedin-dispatcher-function \
+            --zip-file fileb://deployment.zip

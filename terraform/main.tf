@@ -10,15 +10,30 @@ resource "aws_ecr_repository" "scraper_repo" {
   force_delete = true
 }
 
-# --- 2. DYNAMODB ---
-resource "aws_dynamodb_table" "jobs_table" {
-  name         = "LinkedInJobs-V2"
+# --- 2. DYNAMODB (MULTI-TENANT) ---
+
+# Table 1: Stores the User, their URL, and how often to scrape
+resource "aws_dynamodb_table" "subscriptions_table" {
+  name         = "Subscriptions-V2"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "job_id"
-  attribute { 
-    name = "job_id" 
+  hash_key     = "subscription_id" # A unique ID for each link a user tracks
+
+  attribute {
+    name = "subscription_id"
     type = "S"
-    }
+  }
+}
+
+# Table 2: Stores the Jobs (Format: "chatId_jobId" so users don't steal each other's alerts)
+resource "aws_dynamodb_table" "seen_jobs_table" {
+  name         = "SeenJobs-V2"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_job_id"
+
+  attribute {
+    name = "user_job_id"
+    type = "S"
+  }
 }
 
 # --- 3. EC2 BOT INFRASTRUCTURE ---
@@ -113,28 +128,95 @@ resource "aws_lambda_function" "bot_lambda" {
   environment {
     variables = {
       TELEGRAM_TOKEN = var.telegram_token
-      CHAT_ID        = var.chat_id
-      DYNAMODB_TABLE = aws_dynamodb_table.jobs_table.name
+      DYNAMODB_TABLE = aws_dynamodb_table.seen_jobs_table.name
     }
   }
 }
 
-# EventBridge Schedule
-resource "aws_cloudwatch_event_rule" "schedule" {
-  name                = "every-hour-v2"
-  schedule_expression = "rate(1 hour)"
+# --- 5. THE QUEUE (Amazon SQS) ---
+resource "aws_sqs_queue" "scraper_queue" {
+  name                       = "linkedin-scraper-queue"
+  visibility_timeout_seconds = 180 # Must be equal to or greater than the Scraper Lambda timeout
+  message_retention_seconds  = 86400 # Hold failed messages for 1 day
 }
 
-resource "aws_cloudwatch_event_target" "trigger_lambda" {
-  rule      = aws_cloudwatch_event_rule.schedule.name
-  target_id = "TriggerScraperV2"
-  arn       = aws_lambda_function.bot_lambda.arn
+
+# Tell SQS to trigger the Playwright Scraper Lambda
+resource "aws_lambda_event_source_mapping" "sqs_to_scraper" {
+  event_source_arn = aws_sqs_queue.scraper_queue.arn
+  function_name    = aws_lambda_function.bot_lambda.arn
+  batch_size       = 1 # Process one URL per Lambda container
 }
 
-resource "aws_lambda_permission" "allow_eventbridge" {
+# Give the Scraper Lambda permission to read from the SQS Queue
+resource "aws_iam_role_policy_attachment" "lambda_sqs_read" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
+}
+
+# --- 6. THE DISPATCHER LAMBDA ---
+resource "aws_iam_role" "dispatcher_role" {
+  name = "linkedin_dispatcher_role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17", Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
+  })
+}
+
+# Dispatcher needs to read DynamoDB, write to SQS, and log to CloudWatch
+resource "aws_iam_role_policy_attachment" "dispatcher_dynamo" {
+  role = aws_iam_role.dispatcher_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+}
+resource "aws_iam_role_policy_attachment" "dispatcher_sqs" {
+  role = aws_iam_role.dispatcher_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSQSFullAccess"
+}
+resource "aws_iam_role_policy_attachment" "dispatcher_logs" {
+  role = aws_iam_role.dispatcher_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# We will create a dummy zip file just to initialize the Lambda. 
+# You will update the code via GitHub Actions later.
+data "archive_file" "dummy_dispatcher" {
+  type        = "zip"
+  output_path = "${path.module}/dummy_dispatcher.zip"
+  source {
+    content  = "def lambda_handler(event, context): pass"
+    filename = "main.py"
+  }
+}
+
+resource "aws_lambda_function" "dispatcher_lambda" {
+  function_name    = "linkedin-dispatcher-function"
+  role             = aws_iam_role.dispatcher_role.arn
+  handler          = "main.lambda_handler"
+  runtime          = "python3.10"
+  filename         = data.archive_file.dummy_dispatcher.output_path
+  source_code_hash = data.archive_file.dummy_dispatcher.output_base64sha256
+  
+  environment {
+    variables = {
+      SUBSCRIPTIONS_TABLE = aws_dynamodb_table.subscriptions_table.name
+      SQS_QUEUE_URL       = aws_sqs_queue.scraper_queue.url
+    }
+  }
+}
+
+# The 1-Minute Heartbeat
+resource "aws_cloudwatch_event_rule" "every_minute" {
+  name                = "every-minute-dispatcher"
+  schedule_expression = "rate(1 minute)"
+}
+resource "aws_cloudwatch_event_target" "trigger_dispatcher" {
+  rule      = aws_cloudwatch_event_rule.every_minute.name
+  target_id = "TriggerDispatcher"
+  arn       = aws_lambda_function.dispatcher_lambda.arn
+}
+resource "aws_lambda_permission" "allow_eventbridge_dispatcher" {
   statement_id  = "AllowExecutionFromCloudWatch"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.bot_lambda.function_name
+  function_name = aws_lambda_function.dispatcher_lambda.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.schedule.arn
+  source_arn    = aws_cloudwatch_event_rule.every_minute.arn
 }
