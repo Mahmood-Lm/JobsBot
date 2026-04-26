@@ -1,8 +1,7 @@
 from playwright.sync_api import sync_playwright
 import time
-import config
 
-def get_jobs():
+def get_jobs(search_url):
     jobs_found = []
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -10,7 +9,7 @@ def get_jobs():
             args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process", "--no-zygote"]
         ) 
         page = browser.new_page()
-        page.goto(config.SEARCH_URL)
+        page.goto(search_url)
         time.sleep(3) 
         
         job_cards = page.locator('ul.jobs-search__results-list > li').all()
