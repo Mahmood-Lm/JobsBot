@@ -59,6 +59,11 @@ resource "aws_iam_role_policy_attachment" "ec2_lambda" {
   role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
 }
+# Give the EC2 Bot Brain permission to read and write to DynamoDB
+resource "aws_iam_role_policy_attachment" "ec2_dynamodb" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+}
 resource "aws_iam_role_policy_attachment" "ec2_ssm" {
   role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"

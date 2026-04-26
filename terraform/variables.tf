@@ -5,7 +5,3 @@ variable "telegram_token" {
   type      = string
   sensitive = true
 }
-variable "chat_id" {
-  type      = string
-  sensitive = true
-}
