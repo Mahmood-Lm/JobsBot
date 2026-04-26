@@ -30,7 +30,8 @@ async def send_welcome(message: types.Message, state: FSMContext):
     await state.clear() # Clear any stuck memory
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Add New Search Link", callback_data="add_link")],
-        [InlineKeyboardButton(text="📋 My Subscriptions", callback_data="view_links")]
+        [InlineKeyboardButton(text="📋 My Subscriptions", callback_data="view_links")],
+        [InlineKeyboardButton(text="🗑️ Delete a Link", callback_data="delete_link_menu")]
     ])
     await message.answer("👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", reply_markup=keyboard)
 
@@ -121,6 +122,62 @@ async def view_links(callback_query: types.CallbackQuery):
             await callback_query.message.answer(msg, parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
         await callback_query.message.answer("❌ Error fetching links from the database.")
+        
+    await callback_query.answer()
+
+# 7. Show the Delete Menu
+@dp.callback_query(F.data == 'delete_link_menu')
+async def show_delete_menu(callback_query: types.CallbackQuery):
+    chat_id = str(callback_query.message.chat.id)
+    
+    try:
+        response = table.scan(
+            FilterExpression="chat_id = :c",
+            ExpressionAttributeValues={":c": chat_id}
+        )
+        items = response.get('Items', [])
+        
+        if not items:
+            await callback_query.message.answer("You don't have any active tracking links to delete.")
+            await callback_query.answer()
+            return
+
+        # Build a dynamic keyboard with all their links
+        keyboard_buttons = []
+        for item in items:
+            # Shorten the URL so it fits nicely on a mobile screen button
+            short_url = item['search_url'][:25] + "..."
+            freq = item['frequency_minutes']
+            
+            # The callback_data will hold the unique UUID!
+            # Example: "del_123e4567-e89b-12d3-a456-426614174000"
+            btn_text = f"❌ Every {freq}m: {short_url}"
+            keyboard_buttons.append([
+                InlineKeyboardButton(text=btn_text, callback_data=f"del_{item['subscription_id']}")
+            ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        await callback_query.message.answer("Select the link you want to stop tracking:", reply_markup=keyboard)
+        
+    except Exception as e:
+        await callback_query.message.answer("❌ Error fetching links from the database.")
+        
+    await callback_query.answer()
+
+# 8. Execute the Deletion
+@dp.callback_query(F.data.startswith('del_'))
+async def process_delete(callback_query: types.CallbackQuery):
+    # Extract the UUID from the callback data (e.g., "del_12345" -> "12345")
+    sub_id = callback_query.data.split('_', 1)[1]
+    
+    try:
+        # Delete the item directly from DynamoDB
+        table.delete_item(
+            Key={'subscription_id': sub_id}
+        )
+        await callback_query.message.answer("✅ Subscription successfully deleted! I will no longer scrape this link.")
+    except Exception as e:
+        await callback_query.message.answer(f"❌ Error deleting link: {e}")
         
     await callback_query.answer()
 
