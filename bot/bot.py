@@ -8,129 +8,131 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Environment variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUBSCRIPTIONS_TABLE = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Connect to the exact database our Dispatcher reads from
 dynamodb = boto3.resource('dynamodb', region_name='eu-central-1')
 table = dynamodb.Table(SUBSCRIPTIONS_TABLE)
 
-# 1. Define our State Machine (The bot's short-term memory)
 class SetupLink(StatesGroup):
     waiting_for_url = State()
     waiting_for_frequency = State()
 
-# 2. The Main Menu
+# --- HELPER KEYBOARDS ---
+def main_menu_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add New Search Link", callback_data="add_link")],
+        [InlineKeyboardButton(text="📋 Manage Subscriptions", callback_data="manage_links")]
+    ])
+
+def back_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_main")]
+    ])
+
+# --- 1. THE MAIN MENU ---
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
-    await state.clear() # Clear any stuck memory
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Add New Search Link", callback_data="add_link")],
-        [InlineKeyboardButton(text="📋 My Subscriptions", callback_data="view_links")],
-        [InlineKeyboardButton(text="🗑️ Delete a Link", callback_data="delete_link_menu")]
-    ])
-    await message.answer("👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", reply_markup=keyboard)
-
-# 3. Step One: User clicks "Add Link"
-@dp.callback_query(F.data == 'add_link')
-async def process_add_link(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer()
-    
-    # Put the bot into the "waiting for URL" state
-    await state.set_state(SetupLink.waiting_for_url)
-    await callback_query.message.answer(
-        "🔗 **Please paste the LinkedIn Job Search URL.**\n\n"
-        "*(Tip: Go to LinkedIn, set your filters like location and 'Past 24 Hours', then copy the URL here.)*",
-        parse_mode="Markdown"
+    await state.clear()
+    await message.answer(
+        "👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", 
+        reply_markup=main_menu_keyboard()
     )
 
-# 4. Step Two: User pastes the URL
+# Universal "Back" Button Handler
+@dp.callback_query(F.data == 'back_to_main')
+async def back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback_query.message.edit_text(
+        "👋 Welcome back to the main menu!\n\nWhat would you like to do?",
+        reply_markup=main_menu_keyboard()
+    )
+    await callback_query.answer()
+
+# --- 2. ADD LINK FLOW ---
+@dp.callback_query(F.data == 'add_link')
+async def process_add_link(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.set_state(SetupLink.waiting_for_url)
+    
+    # Save the ID of this menu message so we can edit it later!
+    await state.update_data(menu_msg_id=callback_query.message.message_id)
+    
+    await callback_query.message.edit_text(
+        "🔗 **Please paste the LinkedIn Job Search URL.**\n\n"
+        "*(Tip: Set your filters on LinkedIn, then copy the URL here.)*",
+        parse_mode="Markdown",
+        reply_markup=back_keyboard() # Allow them to cancel
+    )
+    await callback_query.answer()
+
 @dp.message(SetupLink.waiting_for_url)
 async def capture_url(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    menu_msg_id = data.get('menu_msg_id')
+    chat_id = message.chat.id
+    
+    # 1. Delete the user's text message to keep the chat clean!
+    try:
+        await message.delete()
+    except Exception:
+        pass # Ignore if bot lacks delete permissions
+        
     if not message.text.startswith("http"):
-        await message.answer("❌ That doesn't look like a valid URL. Please try again or type /cancel.")
+        # Edit the menu to show the error
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=menu_msg_id,
+            text="❌ That doesn't look like a valid URL. Please try pasting it again.",
+            reply_markup=back_keyboard()
+        )
         return
 
-    # Save the URL into the bot's temporary memory
     await state.update_data(search_url=message.text)
-    
-    # Move to the next state
     await state.set_state(SetupLink.waiting_for_frequency)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    freq_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡ Every 1 Hour", callback_data="freq_60")],
         [InlineKeyboardButton(text="🚶 Every 4 Hours", callback_data="freq_240")],
-        [InlineKeyboardButton(text="🐢 Once a Day", callback_data="freq_1440")]
+        [InlineKeyboardButton(text="🐢 Once a Day", callback_data="freq_1440")],
+        [InlineKeyboardButton(text="🔙 Cancel", callback_data="back_to_main")]
     ])
-    await message.answer("⏱️ How often should I check this link for new jobs?", reply_markup=keyboard)
+    
+    # 2. Edit the original menu message
+    await bot.edit_message_text(
+        chat_id=chat_id, message_id=menu_msg_id,
+        text="⏱️ How often should I check this link for new jobs?", 
+        reply_markup=freq_keyboard
+    )
 
-# 5. Step Three: User clicks the Frequency -> Save to DB!
 @dp.callback_query(SetupLink.waiting_for_frequency, F.data.startswith('freq_'))
 async def capture_freq(callback_query: types.CallbackQuery, state: FSMContext):
-    # Extract the minutes from the button's callback_data (e.g., "freq_60" -> 60)
     minutes = int(callback_query.data.split('_')[1])
-    
-    # Retrieve the URL from the temporary memory
     data = await state.get_data()
-    search_url = data['search_url']
-    chat_id = str(callback_query.message.chat.id)
-    
-    # Generate a completely unique ID for this subscription
-    sub_id = str(uuid.uuid4())
     
     try:
-        # Write it to DynamoDB
         table.put_item(Item={
-            'subscription_id': sub_id,
-            'chat_id': chat_id,
-            'search_url': search_url,
+            'subscription_id': str(uuid.uuid4()),
+            'chat_id': str(callback_query.message.chat.id),
+            'search_url': data['search_url'],
             'frequency_minutes': minutes,
-            'last_scraped_timestamp': 0 # Setting this to 0 forces the Dispatcher to scrape it IMMEDIATELY
+            'last_scraped_timestamp': 0 
         })
-        
-        # EDIT the existing message instead of sending a new one!
         await callback_query.message.edit_text(
-            "✅ **Link Successfully Added!**\n\nThe cloud dispatcher will pick this up within the next 60 seconds and run your first scrape.", 
-            parse_mode="Markdown"
+            "✅ **Link Successfully Added!**\n\nJobs will begin arriving shortly.", 
+            parse_mode="Markdown",
+            reply_markup=back_keyboard() # Give them an easy way back
         )
     except Exception as e:
-        # Edit the message to show the error
-        await callback_query.message.edit_text(f"❌ Database error: {e}")
+        await callback_query.message.edit_text(f"❌ Database error: {e}", reply_markup=back_keyboard())
         
-    await state.clear() # Clear the memory so the user can start over
+    await state.clear()
     await callback_query.answer()
 
-# 6. View Active Subscriptions
-@dp.callback_query(F.data == 'view_links')
-async def view_links(callback_query: types.CallbackQuery):
-    chat_id = str(callback_query.message.chat.id)
-    try:
-        # Ask DynamoDB for all links belonging to this specific user
-        response = table.scan(
-            FilterExpression="chat_id = :c",
-            ExpressionAttributeValues={":c": chat_id}
-        )
-        items = response.get('Items', [])
-        
-        if not items:
-            await callback_query.message.answer("You don't have any active tracking links.")
-        else:
-            msg = f"📋 **Your Active Links ({len(items)}):**\n\n"
-            for i, item in enumerate(items, 1):
-                msg += f"{i}. Every {item['frequency_minutes']}m: [View Search]({item['search_url']})\n"
-            await callback_query.message.answer(msg, parse_mode="Markdown", disable_web_page_preview=True)
-    except Exception as e:
-        await callback_query.message.answer("❌ Error fetching links from the database.")
-        
-    await callback_query.answer()
-
-# 7. Show the Delete Menu
-@dp.callback_query(F.data == 'delete_link_menu')
-async def show_delete_menu(callback_query: types.CallbackQuery):
+# --- 3. MANAGE & DELETE FLOW ---
+@dp.callback_query(F.data == 'manage_links')
+async def manage_links(callback_query: types.CallbackQuery):
     chat_id = str(callback_query.message.chat.id)
     
     try:
@@ -141,54 +143,49 @@ async def show_delete_menu(callback_query: types.CallbackQuery):
         items = response.get('Items', [])
         
         if not items:
-            await callback_query.message.answer("You don't have any active tracking links to delete.")
-            await callback_query.answer()
+            await callback_query.message.edit_text(
+                "📋 You don't have any active tracking links.",
+                reply_markup=back_keyboard()
+            )
             return
 
-        # Build a dynamic keyboard with all their links
+        # Build text AND buttons
+        msg = f"📋 **Your Active Subscriptions ({len(items)}):**\n\n"
         keyboard_buttons = []
-        for item in items:
-            # Shorten the URL so it fits nicely on a mobile screen button
+        
+        for i, item in enumerate(items, 1):
             short_url = item['search_url'][:25] + "..."
             freq = item['frequency_minutes']
             
-            # The callback_data will hold the unique UUID!
-            # Example: "del_123e4567-e89b-12d3-a456-426614174000"
-            btn_text = f"❌ Every {freq}m: {short_url}"
+            # Add to text list
+            msg += f"{i}. Every {freq}m: [View Link]({item['search_url']})\n"
+            
+            # Add a matching delete button below
             keyboard_buttons.append([
-                InlineKeyboardButton(text=btn_text, callback_data=f"del_{item['subscription_id']}")
+                InlineKeyboardButton(text=f"🗑️ Delete #{i} ({freq}m)", callback_data=f"del_{item['subscription_id']}")
             ])
 
+        keyboard_buttons.append([InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_main")])
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        await callback_query.message.answer("Select the link you want to stop tracking:", reply_markup=keyboard)
+        
+        await callback_query.message.edit_text(msg, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=keyboard)
         
     except Exception as e:
-        await callback_query.message.answer("❌ Error fetching links from the database.")
+        await callback_query.message.edit_text(f"❌ Error fetching links.", reply_markup=back_keyboard())
         
     await callback_query.answer()
 
-# 8. Execute the Deletion
 @dp.callback_query(F.data.startswith('del_'))
 async def process_delete(callback_query: types.CallbackQuery):
-    # Extract the UUID from the callback data (e.g., "del_12345" -> "12345")
     sub_id = callback_query.data.split('_', 1)[1]
     
     try:
-        # Delete the item directly from DynamoDB
-        table.delete_item(
-            Key={'subscription_id': sub_id}
-        )
-        await callback_query.message.edit_text("✅ Subscription successfully deleted! I will no longer scrape this link.")
+        table.delete_item(Key={'subscription_id': sub_id})
+        # Trick: Immediately call manage_links again to refresh the list on their screen!
+        await manage_links(callback_query) 
     except Exception as e:
-        await callback_query.message.edit_text(f"❌ Error deleting link: {e}")
-        
-    await callback_query.answer()
-
-# Universal Cancel Command
-@dp.message(Command("cancel"))
-async def cancel_handler(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🚫 Cancelled. Type /start to open the menu.")
+        await callback_query.message.edit_text(f"❌ Error deleting link: {e}", reply_markup=back_keyboard())
+        await callback_query.answer()
 
 async def main():
     print("Bot Brain is waking up and listening to Telegram...")
