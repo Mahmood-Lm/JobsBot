@@ -45,3 +45,28 @@ def get_jobs(search_url):
         browser.close()
         
     return jobs_found
+
+def get_job_description(job_url):
+    """Visits a specific job page to extract the full description text."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process", "--no-zygote"]
+        ) 
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
+        
+        try:
+            page.goto(job_url)
+            # LinkedIn stores guest job descriptions in this specific HTML class
+            page.wait_for_selector('.show-more-less-html__markup, .core-section-container__content', timeout=8000)
+            description = page.locator('.show-more-less-html__markup, .core-section-container__content').inner_text()
+            print("DEBUG - Successfully deep-scraped job description.")
+        except Exception as e:
+            print(f"DEBUG - Could not load full description: {e}")
+            description = "Description not available."
+            
+        browser.close()
+    return description
