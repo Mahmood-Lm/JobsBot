@@ -60,9 +60,12 @@ def get_job_description(job_url):
         
         try:
             page.goto(job_url)
-            # LinkedIn stores guest job descriptions in this specific HTML class
-            page.wait_for_selector('.show-more-less-html__markup, .core-section-container__content', timeout=8000)
-            description = page.locator('.show-more-less-html__markup, .core-section-container__content').inner_text()
+            # 1. Expanded CSS selectors to catch all LinkedIn guest layouts
+            selectors = '.description__text, .show-more-less-html__markup, .core-section-container__content, .jobs-description-content__text'
+            page.wait_for_selector(selectors, timeout=8000)
+            
+            # 2. Use .first to prevent "Strict Mode Violation" crashes if multiple elements exist
+            description = page.locator(selectors).first.inner_text()
             print("DEBUG - Successfully deep-scraped job description.")
         except Exception as e:
             print(f"DEBUG - Could not load full description: {e}")
