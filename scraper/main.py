@@ -4,10 +4,11 @@ import json
 import boto3
 import config
 from google import genai
+from playwright.sync_api import sync_playwright # <--- We moved Playwright here
 from scraper import get_jobs, get_job_description
 from telegram_bot import send_message
 
-# 1. Initialize AWS and AI
+# Initialize AWS and AI
 dynamodb = boto3.resource('dynamodb', region_name='eu-central-1') 
 jobs_table = dynamodb.Table(config.DYNAMODB_TABLE)
 users_table = dynamodb.Table(os.getenv("USERS_TABLE", "Users-V2"))
@@ -23,7 +24,6 @@ def is_job_seen(user_job_id):
         return False
 
 def get_user_cv(chat_id):
-    """Fetches the distilled CV profile from the Users table."""
     try:
         response = users_table.get_item(Key={'chat_id': str(chat_id)})
         return response.get('Item', {}).get('distilled_cv_profile')
@@ -31,72 +31,88 @@ def get_user_cv(chat_id):
         print(f"Error fetching CV: {e}")
         return None
 
-def lambda_handler(event, context):
-    for record in event.get('Records', []):
-        body = json.loads(record['body'])
-        chat_id = str(body['chat_id'])
-        search_url = body['search_url']
+def lambda_handler(event, lambda_context):
+    
+    # 1. Boot up the single Master Browser for this Lambda execution
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process", "--no-zygote"]
+        ) 
+        playwright_context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         
-        cv_profile = get_user_cv(chat_id)
-        current_jobs = get_jobs(search_url)
-        new_jobs = []
-        
-        for job in current_jobs:
-            user_job_id = f"{chat_id}_{job['id']}"
-            if not is_job_seen(user_job_id):
-                new_jobs.append((job, user_job_id))
-        
-        if not new_jobs:
-            print("No new jobs found. Sleeping.")
-            continue 
-
-        # --- BATCHING INITIALIZATION ---
-        final_message = f"🚨 <b>{len(new_jobs)} New Jobs Found!</b> 🚨\n\n"
-        
-        for job, user_job_id in new_jobs:
-            job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
+        # 2. Process all incoming job alerts from the SQS queue
+        for record in event.get('Records', []):
+            body = json.loads(record['body'])
+            chat_id = str(body['chat_id'])
+            search_url = body['search_url']
             
-            if cv_profile:
-                print(f"DEBUG - Deep scraping {job['title']} for AI analysis...")
-                job_desc = get_job_description(job['link'])
-                
-                time.sleep(12) # Prevent Rate Limits
-                
-                prompt = f"""
-                You are an expert technical recruiter. Evaluate this job match.
-                
-                CANDIDATE PROFILE:
-                {cv_profile}
-                
-                JOB DESCRIPTION:
-                {job_desc}
-                
-                1. Give a Match Score from 1 to 10.
-                2. Write a 1-2 sentence summary explaining WHY it is a good or bad match.
-                
-                Format EXACTLY like this:
-                Score: [Number]/10
-                Summary: [Your 1-2 sentences]
-                """
-                
-                try:
-                    response = ai_client.models.generate_content(
-                        model='gemma-4-31b-it',
-                        contents=prompt
-                    )
-                    # Wrap the AI output in Telegram Blockquotes
-                    job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
-                except Exception as e:
-                    print(f"AI Generation Failed: {e}")
-                    job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
+            cv_profile = get_user_cv(chat_id)
+            
+            # Pass the open browser context to get_jobs!
+            current_jobs = get_jobs(playwright_context, search_url) 
+            new_jobs = []
+            
+            for job in current_jobs:
+                user_job_id = f"{chat_id}_{job['id']}"
+                if not is_job_seen(user_job_id):
+                    new_jobs.append((job, user_job_id))
+            
+            if not new_jobs:
+                print("No new jobs found. Sleeping.")
+                continue 
 
-            job_segment += f"<a href='{job['link']}'>Apply Here</a>\n\n"
-            final_message += job_segment
+            final_message = f"🚨 <b>{len(new_jobs)} New Jobs Found!</b> 🚨\n\n"
+            
+            for job, user_job_id in new_jobs:
+                job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
+                
+                if cv_profile:
+                    print(f"DEBUG - Deep scraping {job['title']} for AI analysis...")
+                    
+                    # Pass the open browser context to get_job_description!
+                    job_desc = get_job_description(playwright_context, job['link'])
+                    
+                    time.sleep(12) # Still keeping our AI rate limit safety net
+                    
+                    prompt = f"""
+                    You are an expert technical recruiter. Evaluate this job match.
+                    
+                    CANDIDATE PROFILE:
+                    {cv_profile}
+                    
+                    JOB DESCRIPTION:
+                    {job_desc}
+                    
+                    1. Give a Match Score from 1 to 10.
+                    2. Write a 1-2 sentence summary explaining WHY it is a good or bad match.
+                    
+                    Format EXACTLY like this:
+                    Score: [Number]/10
+                    Summary: [Your 1-2 sentences]
+                    """
+                    
+                    try:
+                        response = ai_client.models.generate_content(
+                            model='gemma-4-31b-it',
+                            contents=prompt
+                        )
+                        job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
+                    except Exception as e:
+                        print(f"AI Generation Failed: {e}")
+                        job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
 
-        # --- SEND BATCHED MESSAGE & SAVE TO DB ---
-        if send_message(chat_id, final_message.strip()):
-            print(f"Sent batched alert for {len(new_jobs)} jobs. Saving to DB...")
-            for _, user_job_id in new_jobs:
-                jobs_table.put_item(Item={'user_job_id': user_job_id})
+                job_segment += f"<a href='{job['link']}'>Apply Here</a>\n\n"
+                final_message += job_segment
+
+            if send_message(chat_id, final_message.strip()):
+                print(f"Sent batched alert for {len(new_jobs)} jobs. Saving to DB...")
+                for _, user_job_id in new_jobs:
+                    jobs_table.put_item(Item={'user_job_id': user_job_id})
+                    
+        # 3. Cleanly shut down the master browser
+        browser.close()
                 
     return {'statusCode': 200, 'body': "Scrape completed successfully"}
