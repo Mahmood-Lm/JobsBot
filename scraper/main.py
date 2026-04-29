@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import boto3
 import config
@@ -36,20 +37,10 @@ def lambda_handler(event, context):
         chat_id = str(body['chat_id'])
         search_url = body['search_url']
         
-        print(f"Processing Scrape -> Chat ID: {chat_id}")
-
-        # 1. Check if the user has a CV on file
         cv_profile = get_user_cv(chat_id)
-        if cv_profile:
-            print("DEBUG - Found User CV Profile. AI Scoring Enabled.")
-        else:
-            print("DEBUG - No CV found for user. Defaulting to standard alerts.")
-
-        # 2. Get the jobs from the search page
         current_jobs = get_jobs(search_url)
         new_jobs = []
         
-        # 3. Check for new jobs unique to THIS user
         for job in current_jobs:
             user_job_id = f"{chat_id}_{job['id']}"
             if not is_job_seen(user_job_id):
@@ -59,15 +50,17 @@ def lambda_handler(event, context):
             print("No new jobs found. Sleeping.")
             continue 
 
-        # 4. Deep Scrape and AI Matchmaking!
+        # --- BATCHING INITIALIZATION ---
+        final_message = f"🚨 <b>{len(new_jobs)} New Jobs Found!</b> 🚨\n\n"
+        
         for job, user_job_id in new_jobs:
-            message = f"🚨 <b>New Job Found!</b> 🚨\n\n"
-            message += f"▪️ <b>{job['title']}</b> at {job['company']}\n"
+            job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
             
-            # If we have a CV, unleash the AI
             if cv_profile:
                 print(f"DEBUG - Deep scraping {job['title']} for AI analysis...")
                 job_desc = get_job_description(job['link'])
+                
+                time.sleep(12) # Prevent Rate Limits
                 
                 prompt = f"""
                 You are an expert technical recruiter. Evaluate this job match.
@@ -87,21 +80,23 @@ def lambda_handler(event, context):
                 """
                 
                 try:
-                    # New SDK syntax
                     response = ai_client.models.generate_content(
                         model='gemma-4-31b-it',
                         contents=prompt
                     )
-                    message += f"\n🤖 <b>AI Match Analysis:</b>\n{response.text.strip()}\n"
+                    # Wrap the AI output in Telegram Blockquotes
+                    job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
                 except Exception as e:
                     print(f"AI Generation Failed: {e}")
-                    message += "\n🤖 <i>AI Match Analysis currently unavailable.</i>\n"
+                    job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
 
-            message += f"\n<a href='{job['link']}'>Apply Here</a>"
+            job_segment += f"<a href='{job['link']}'>Apply Here</a>\n\n"
+            final_message += job_segment
 
-            # 5. Send message and save to DB
-            if send_message(chat_id, message):
-                print(f"Sent alert for {job['title']}. Saving to DB...")
+        # --- SEND BATCHED MESSAGE & SAVE TO DB ---
+        if send_message(chat_id, final_message.strip()):
+            print(f"Sent batched alert for {len(new_jobs)} jobs. Saving to DB...")
+            for _, user_job_id in new_jobs:
                 jobs_table.put_item(Item={'user_job_id': user_job_id})
                 
     return {'statusCode': 200, 'body': "Scrape completed successfully"}
