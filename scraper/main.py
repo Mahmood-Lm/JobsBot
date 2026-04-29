@@ -13,7 +13,7 @@ users_table = dynamodb.Table(os.getenv("USERS_TABLE", "Users-V2"))
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
-ai_model = genai.GenerativeModel('gemini-2.5-flash')
+ai_model = genai.GenerativeModel('gemma-4-31b-it')
 
 def is_job_seen(user_job_id):
     try:
