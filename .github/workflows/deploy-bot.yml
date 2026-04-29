@@ -44,5 +44,5 @@ jobs:
               "docker pull '$ECR_REGISTRY'/linkedin-bot-v2:latest",
               "docker stop interactive_bot || true",
               "docker rm interactive_bot || true",
-              "docker run -d --name interactive_bot --restart unless-stopped -e TELEGRAM_TOKEN='$TELEGRAM_TOKEN' -e GEMINI_API_KEY='$GEMINI_API_KEY''$ECR_REGISTRY'/linkedin-bot-v2:latest"
+              "docker run -d --name interactive_bot --restart unless-stopped -e TELEGRAM_TOKEN='$TELEGRAM_TOKEN' -e GEMINI_API_KEY='$GEMINI_API_KEY' '$ECR_REGISTRY'/linkedin-bot-v2:latest"
             ]'
