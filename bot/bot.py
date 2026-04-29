@@ -293,7 +293,7 @@ async def handle_cv_upload(message: types.Message):
         await processing_msg.edit_text("🧠 Distilling your profile with AI...")
 
         # 4. Ask Gemini to Distill the Profile
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         prompt = f"""
         You are an expert tech recruiter. Read the following raw extracted text from a candidate's CV.
         Distill this into a dense, highly structured 300-word 'Candidate Profile'. 
