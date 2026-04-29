@@ -5,7 +5,7 @@ import boto3
 import urllib.parse
 import io
 import PyPDF2
-import google.generativeai as genai
+from google import genai
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -17,7 +17,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUBSCRIPTIONS_TABLE = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
 USERS_TABLE = os.getenv("USERS_TABLE", "Users-V2")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Connect to the new Users table
 
@@ -293,7 +293,6 @@ async def handle_cv_upload(message: types.Message):
         await processing_msg.edit_text("🧠 Distilling your profile with AI...")
 
         # 4. Ask Gemini to Distill the Profile
-        model = genai.GenerativeModel('gemma-4-31b-it')
         prompt = f"""
         You are an expert tech recruiter. Read the following raw extracted text from a candidate's CV.
         Distill this into a dense, highly structured 300-word 'Candidate Profile'. 
@@ -308,7 +307,10 @@ async def handle_cv_upload(message: types.Message):
         {raw_text}
         """
         
-        response = model.generate_content(prompt)
+        response = ai_client.models.generate_content(
+            model='gemma-4-31b-it',
+            contents=prompt
+        )
         distilled_profile = response.text
         
         # 5. Save the Distilled Profile to the normalized Users table
