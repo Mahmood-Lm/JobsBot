@@ -2,7 +2,7 @@ import os
 import json
 import boto3
 import config
-import google.generativeai as genai
+from google import genai
 from scraper import get_jobs, get_job_description
 from telegram_bot import send_message
 
@@ -12,8 +12,7 @@ jobs_table = dynamodb.Table(config.DYNAMODB_TABLE)
 users_table = dynamodb.Table(os.getenv("USERS_TABLE", "Users-V2"))
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-ai_model = genai.GenerativeModel('gemma-4-31b-it')
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 def is_job_seen(user_job_id):
     try:
@@ -88,8 +87,12 @@ def lambda_handler(event, context):
                 """
                 
                 try:
-                    ai_response = ai_model.generate_content(prompt).text
-                    message += f"\n🤖 <b>AI Match Analysis:</b>\n{ai_response.strip()}\n"
+                    # New SDK syntax
+                    response = ai_client.models.generate_content(
+                        model='gemma-4-31b-it',
+                        contents=prompt
+                    )
+                    message += f"\n🤖 <b>AI Match Analysis:</b>\n{response.text.strip()}\n"
                 except Exception as e:
                     print(f"AI Generation Failed: {e}")
                     message += "\n🤖 <i>AI Match Analysis currently unavailable.</i>\n"
