@@ -293,7 +293,7 @@ async def handle_cv_upload(message: types.Message):
         await processing_msg.edit_text("🧠 Distilling your profile with AI...")
 
         # 4. Ask Gemini to Distill the Profile
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemma-4-31b-it')
         prompt = f"""
         You are an expert tech recruiter. Read the following raw extracted text from a candidate's CV.
         Distill this into a dense, highly structured 300-word 'Candidate Profile'. 
@@ -325,7 +325,14 @@ async def handle_cv_upload(message: types.Message):
         )
 
     except Exception as e:
-        await processing_msg.edit_text(f"❌ An error occurred while processing your CV: {e}")
+        error_msg = str(e)
+        if "429" in error_msg or "Quota exceeded" in error_msg:
+            await processing_msg.edit_text(
+                "⏳ **AI is cooling down!**\n\nPlease wait 60 seconds and upload your CV again.", 
+                parse_mode="Markdown"
+            )
+        else:
+            await processing_msg.edit_text(f"❌ An error occurred while processing your CV: {e}")
 
 async def main():
     print("Bot Brain is waking up and listening to Telegram...")
