@@ -36,6 +36,18 @@ resource "aws_dynamodb_table" "seen_jobs_table" {
   }
 }
 
+# --- NEW: Users Table for AI CV Profiles ---
+resource "aws_dynamodb_table" "users_table" {
+  name           = "Users-V2"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "chat_id"
+
+  attribute {
+    name = "chat_id"
+    type = "S"
+  }
+}
+
 # --- 3. EC2 BOT INFRASTRUCTURE ---
 resource "aws_security_group" "ec2_sg" {
   name        = "telegram-bot-v2-sg"
@@ -134,6 +146,8 @@ resource "aws_lambda_function" "bot_lambda" {
     variables = {
       TELEGRAM_TOKEN = var.telegram_token
       DYNAMODB_TABLE = aws_dynamodb_table.seen_jobs_table.name
+      USERS_TABLE    = aws_dynamodb_table.users_table.name
+      GEMINI_API_KEY = var.gemini_api_key
     }
   }
 }
