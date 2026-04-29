@@ -3,20 +3,30 @@ import os
 import uuid
 import boto3
 import urllib.parse
+import io
+import PyPDF2
+import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUBSCRIPTIONS_TABLE = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
+USERS_TABLE = os.getenv("USERS_TABLE", "Users-V2")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
+
+# Connect to the new Users table
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 dynamodb = boto3.resource('dynamodb', region_name='eu-central-1')
-table = dynamodb.Table(SUBSCRIPTIONS_TABLE)
+users_table = dynamodb.Table(USERS_TABLE)
+subs_table = dynamodb.Table(SUBSCRIPTIONS_TABLE)
 
 # Expanded FSM to include the Wizard steps
 class SetupLink(StatesGroup):
@@ -187,7 +197,7 @@ async def capture_freq(callback_query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
     try:
-        table.put_item(Item={
+        subs_table.put_item(Item={
             'subscription_id': str(uuid.uuid4()),
             'chat_id': str(callback_query.message.chat.id),
             'search_url': data['search_url'],
@@ -211,7 +221,7 @@ async def manage_links(callback_query: types.CallbackQuery):
     chat_id = str(callback_query.message.chat.id)
     
     try:
-        response = table.scan(
+        response = subs_table.scan(
             FilterExpression="chat_id = :c",
             ExpressionAttributeValues={":c": chat_id}
         )
@@ -249,11 +259,73 @@ async def manage_links(callback_query: types.CallbackQuery):
 async def process_delete(callback_query: types.CallbackQuery):
     sub_id = callback_query.data.split('_', 1)[1]
     try:
-        table.delete_item(Key={'subscription_id': sub_id})
+        subs_table.delete_item(Key={'subscription_id': sub_id})
         await manage_links(callback_query) 
     except Exception as e:
         await callback_query.message.edit_text(f"❌ Error deleting link: {e}", reply_markup=back_keyboard())
         await callback_query.answer()
+
+# --- 4. CV UPLOAD & AI DISTILLATION FLOW ---
+@dp.message(F.document)
+async def handle_cv_upload(message: types.Message):
+    # 1. Check if it's actually a PDF
+    if not message.document.file_name.lower().endswith('.pdf'):
+        await message.answer("❌ Please upload your CV as a PDF file.")
+        return
+        
+    processing_msg = await message.answer("🔄 Downloading and reading your CV...")
+
+    try:
+        # 2. Download the file into temporary memory (no hard drive storage needed)
+        file_info = await bot.get_file(message.document.file_id)
+        downloaded_file = await bot.download_file(file_info.file_path)
+        
+        # 3. Extract raw text using PyPDF2
+        pdf_reader = PyPDF2.PdfReader(downloaded_file)
+        raw_text = ""
+        for page in pdf_reader.pages:
+            raw_text += page.extract_text() or ""
+            
+        if not raw_text.strip():
+            await processing_msg.edit_text("❌ I couldn't extract any text from this PDF. It might be an image-based scan.")
+            return
+
+        await processing_msg.edit_text("🧠 Distilling your profile with AI...")
+
+        # 4. Ask Gemini to Distill the Profile
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        You are an expert tech recruiter. Read the following raw extracted text from a candidate's CV.
+        Distill this into a dense, highly structured 300-word 'Candidate Profile'. 
+        Focus strictly on: 
+        - Total years of experience
+        - Core technical skills and languages
+        - Highest education
+        - The specific types of roles they are best suited for.
+        Do not include fluff or personal hobbies.
+        
+        Raw CV Text:
+        {raw_text}
+        """
+        
+        response = model.generate_content(prompt)
+        distilled_profile = response.text
+        
+        # 5. Save the Distilled Profile to the normalized Users table
+        users_table.put_item(
+            Item={
+                'chat_id': str(message.chat.id),
+                'distilled_cv_profile': distilled_profile
+            }
+        )
+        
+        await processing_msg.edit_text(
+            "✅ **CV Successfully Processed & Saved!**\n\nI will use it to score your future job matches.",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        await processing_msg.edit_text(f"❌ An error occurred while processing your CV: {e}")
 
 async def main():
     print("Bot Brain is waking up and listening to Telegram...")
