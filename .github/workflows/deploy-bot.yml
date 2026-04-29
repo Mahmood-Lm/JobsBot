@@ -3,6 +3,7 @@ on:
   push:
     branches: [ "main" ]
     paths: [ "bot/**" ]
+  workflow_dispatch: # Allow manual triggering of the workflow
 
 jobs:
   build-and-deploy:
