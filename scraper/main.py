@@ -63,13 +63,15 @@ def lambda_handler(event, lambda_context):
             if not new_jobs:
                 print("No new jobs found. Sleeping.")
                 continue 
-
+            
+            # flag to track AI health
+            ai_credits_exhausted = False
             final_message = f"🚨 <b>{len(new_jobs)} New Jobs Found!</b> 🚨\n\n"
             
             for job, user_job_id in new_jobs:
                 job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
                 
-                if cv_profile:
+                if cv_profile and not ai_credits_exhausted:
                     print(f"DEBUG - Deep scraping {job['title']} for AI analysis...")
                     
                     # Pass the open browser context to get_job_description!
@@ -101,8 +103,18 @@ def lambda_handler(event, lambda_context):
                         )
                         job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
                     except Exception as e:
-                        print(f"AI Generation Failed: {e}")
+                        error_msg = str(e).lower()
+                        print(f"AI Generation Failed: {error_msg}")
                         job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
+                        
+                        # If it's a billing/quota error, flip the switch to save the rest of the batch!
+                        if "quota" in error_msg or "billing" in error_msg or "429" in error_msg:
+                            print("CRITICAL: AI Credits empty! Bypassing AI for remaining jobs.")
+                            ai_credits_exhausted = True
+
+                elif ai_credits_exhausted:
+                    # If credits are dead, skip the deep scrape and AI entirely to save time
+                    job_segment += "🤖 <i>AI Match Analysis skipped (API Credits Exhausted).</i>\n"
 
                 job_segment += f"<a href='{job['link']}'>Apply Here</a>\n\n"
                 final_message += job_segment
