@@ -74,10 +74,15 @@ def lambda_handler(event, lambda_context):
                 if cv_profile and not ai_credits_exhausted:
                     print(f"DEBUG - Deep scraping {job['title']} for AI analysis...")
                     
+                    scrape_start_time = time.time()
+                    
                     # Pass the open browser context to get_job_description!
                     job_desc = get_job_description(playwright_context, job['link'])
                     
-                    time.sleep(12) # Still keeping our AI rate limit safety net
+                    scrape_end_time = time.time()
+                    print(f"DEBUG - Scrape took {scrape_end_time - scrape_start_time:.2f} seconds.")
+                    
+                    time.sleep(5) # AI rate limit safety net
                     
                     prompt = f"""
                     You are an expert technical recruiter. Evaluate this job match.
@@ -97,10 +102,13 @@ def lambda_handler(event, lambda_context):
                     """
                     
                     try:
+                        ai_start_time = time.time()
                         response = ai_client.models.generate_content(
                             model='gemma-4-31b-it',
                             contents=prompt
                         )
+                        ai_end_time = time.time()
+                        print(f"DEBUG - AI generation took {ai_end_time - ai_start_time:.2f} seconds.")
                         job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
                     except Exception as e:
                         error_msg = str(e).lower()
