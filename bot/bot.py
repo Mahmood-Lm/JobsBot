@@ -12,6 +12,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+# --- NEW WEBHOOK IMPORTS ---
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUBSCRIPTIONS_TABLE = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
@@ -19,16 +22,17 @@ USERS_TABLE = os.getenv("USERS_TABLE", "Users-V2")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Connect to the new Users table
+# --- WEBHOOK CONFIGURATION ---
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+# The ALB DNS name injected by Terraform + the secret path
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "") + WEBHOOK_PATH
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-
-dynamodb = boto3.resource('dynamodb', region_name='eu-central-1')
+dynamodb = boto3.resource('dynamodb', region_name=os.getenv("AWS_DEFAULT_REGION", "eu-central-1"))
 users_table = dynamodb.Table(USERS_TABLE)
 subs_table = dynamodb.Table(SUBSCRIPTIONS_TABLE)
 
-# Expanded FSM to include the Wizard steps
 class SetupLink(StatesGroup):
     waiting_for_url = State()
     waiting_for_job_title = State()
@@ -38,28 +42,28 @@ class SetupLink(StatesGroup):
 # --- HELPER KEYBOARDS ---
 def main_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Add New Search", callback_data="add_search")], # Renamed button
-        [InlineKeyboardButton(text="📋 Manage Subscriptions", callback_data="manage_links")]
+        [InlineKeyboardButton(text="🎯 Add New Search", callback_data="add_search")],
+        [InlineKeyboardButton(text="⚙️ Manage Subscriptions", callback_data="manage_links")]
     ])
 
 def search_type_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔗 Paste a LinkedIn Link", callback_data="choose_link")],
-        [InlineKeyboardButton(text="🪄 Step-by-Step Wizard", callback_data="choose_wizard")],
-        [InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="🧙‍♂️ Step-by-Step Wizard", callback_data="choose_wizard")],
+        [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back_to_main")]
     ])
 
 def freq_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ Every 1 Hour", callback_data="freq_60")],
-        [InlineKeyboardButton(text="🚶 Every 4 Hours", callback_data="freq_240")],
-        [InlineKeyboardButton(text="🐢 Once a Day", callback_data="freq_1440")],
-        [InlineKeyboardButton(text="🔙 Cancel", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="⏱️ Every 1 Hour", callback_data="freq_60")],
+        [InlineKeyboardButton(text="⏱️ Every 4 Hours", callback_data="freq_240")],
+        [InlineKeyboardButton(text="🌅 Once a Day", callback_data="freq_1440")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="back_to_main")]
     ])
 
 def back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back_to_main")]
     ])
 
 # --- 1. THE MAIN MENU ---
@@ -83,7 +87,6 @@ async def back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
 # --- 2. THE CHOICE MENU ---
 @dp.callback_query(F.data == 'add_search')
 async def process_add_search(callback_query: types.CallbackQuery, state: FSMContext):
-    # Save the menu message ID here so all branches can use it
     await state.update_data(menu_msg_id=callback_query.message.message_id)
     await callback_query.message.edit_text(
         "How would you like to set up your job search?",
@@ -109,7 +112,7 @@ async def capture_url(message: types.Message, state: FSMContext):
     menu_msg_id = data.get('menu_msg_id')
     chat_id = message.chat.id
     
-    try: await message.delete() # Ghost delete
+    try: await message.delete()
     except Exception: pass
         
     if not message.text.startswith("http"):
@@ -119,7 +122,6 @@ async def capture_url(message: types.Message, state: FSMContext):
             reply_markup=back_keyboard()
         )
         return
-
     await state.update_data(search_url=message.text)
     await state.set_state(SetupLink.waiting_for_frequency)
     
@@ -145,7 +147,7 @@ async def capture_job_title(message: types.Message, state: FSMContext):
     data = await state.get_data()
     menu_msg_id = data.get('menu_msg_id')
     
-    try: await message.delete() # Ghost delete
+    try: await message.delete()
     except Exception: pass
     
     job_title = message.text.strip()
@@ -154,7 +156,7 @@ async def capture_job_title(message: types.Message, state: FSMContext):
     
     await bot.edit_message_text(
         chat_id=message.chat.id, message_id=menu_msg_id,
-        text=f"📍 **Got it! Title: {job_title}**\n\nWhere are you looking? *(e.g., Remote, Brazil, London)*",
+        text=f"✅ **Got it! Title: {job_title}**\n\nWhere are you looking? *(e.g., Remote, Brazil, London)*",
         parse_mode="Markdown",
         reply_markup=back_keyboard()
     )
@@ -166,11 +168,9 @@ async def capture_location(message: types.Message, state: FSMContext):
     job_title = data.get('job_title')
     location = message.text.strip()
     
-    try: await message.delete() # Ghost delete
+    try: await message.delete()
     except Exception: pass
     
-    # === THE MAGIC: BUILD THE URL ===
-    # We add f_TPR=r86400 to ensure we only get jobs posted in the last 24 hours
     params = {
         "keywords": job_title,
         "location": location,
@@ -179,7 +179,6 @@ async def capture_location(message: types.Message, state: FSMContext):
     encoded_params = urllib.parse.urlencode(params)
     generated_url = f"https://www.linkedin.com/jobs/search/?{encoded_params}"
     
-    # Save the generated URL exactly as if they had pasted it
     await state.update_data(search_url=generated_url)
     await state.set_state(SetupLink.waiting_for_frequency)
     
@@ -229,11 +228,11 @@ async def manage_links(callback_query: types.CallbackQuery):
         
         if not items:
             await callback_query.message.edit_text(
-                "📋 You don't have any active tracking links.",
+                "❌ You don't have any active tracking links.",
                 reply_markup=back_keyboard()
             )
             return
-
+            
         msg = f"📋 **Your Active Subscriptions ({len(items)}):**\n\n"
         keyboard_buttons = []
         
@@ -244,8 +243,8 @@ async def manage_links(callback_query: types.CallbackQuery):
             keyboard_buttons.append([
                 InlineKeyboardButton(text=f"🗑️ Delete #{i} ({freq}m)", callback_data=f"del_{item['subscription_id']}")
             ])
-
-        keyboard_buttons.append([InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_main")])
+            
+        keyboard_buttons.append([InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back_to_main")])
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         await callback_query.message.edit_text(msg, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=keyboard)
@@ -268,19 +267,16 @@ async def process_delete(callback_query: types.CallbackQuery):
 # --- 4. CV UPLOAD & AI DISTILLATION FLOW ---
 @dp.message(F.document)
 async def handle_cv_upload(message: types.Message):
-    # 1. Check if it's actually a PDF
     if not message.document.file_name.lower().endswith('.pdf'):
         await message.answer("❌ Please upload your CV as a PDF file.")
         return
         
-    processing_msg = await message.answer("🔄 Downloading and reading your CV...")
-
+    processing_msg = await message.answer("⏳ Downloading and reading your CV...")
+    
     try:
-        # 2. Download the file into temporary memory (no hard drive storage needed)
         file_info = await bot.get_file(message.document.file_id)
         downloaded_file = await bot.download_file(file_info.file_path)
         
-        # 3. Extract raw text using PyPDF2
         pdf_reader = PyPDF2.PdfReader(downloaded_file)
         raw_text = ""
         for page in pdf_reader.pages:
@@ -289,10 +285,9 @@ async def handle_cv_upload(message: types.Message):
         if not raw_text.strip():
             await processing_msg.edit_text("❌ I couldn't extract any text from this PDF. It might be an image-based scan.")
             return
-
-        await processing_msg.edit_text("🧠 Distilling your profile with AI...")
-
-        # 4. Ask Gemini to Distill the Profile
+            
+        await processing_msg.edit_text("⏳ Distilling your profile with AI...")
+        
         prompt = f"""
         You are an expert tech recruiter. Read the following raw extracted text from a candidate's CV.
         Distill this into a dense, highly structured 300-word 'Candidate Profile'. 
@@ -313,7 +308,6 @@ async def handle_cv_upload(message: types.Message):
         )
         distilled_profile = response.text
         
-        # 5. Save the Distilled Profile to the normalized Users table
         users_table.put_item(
             Item={
                 'chat_id': str(message.chat.id),
@@ -325,20 +319,42 @@ async def handle_cv_upload(message: types.Message):
             "✅ **CV Successfully Processed & Saved!**\n\nI will use it to score your future job matches.",
             parse_mode="Markdown"
         )
-
     except Exception as e:
         error_msg = str(e)
         if "429" in error_msg or "Quota exceeded" in error_msg:
             await processing_msg.edit_text(
-                "⏳ **AI is cooling down!**\n\nPlease wait 60 seconds and upload your CV again.", 
+                "⚠️ **AI is cooling down!**\n\nPlease wait 60 seconds and upload your CV again.", 
                 parse_mode="Markdown"
             )
         else:
             await processing_msg.edit_text(f"❌ An error occurred while processing your CV: {e}")
 
-async def main():
-    print("Bot Brain is waking up and listening to Telegram...")
-    await dp.start_polling(bot)
+
+# --- STARTUP HOOK ---
+async def on_startup(bot: Bot):
+    print(f"Registering Webhook URL: {WEBHOOK_URL}")
+    await bot.set_webhook(url=WEBHOOK_URL)
+
+
+# --- MAIN WEB SERVER LOOP ---
+def main():
+    print("Bot Brain is waking up and starting Webhook Server...")
+    
+    # Register the startup hook
+    dp.startup.register(on_startup)
+    
+    app = web.Application()
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+    )
+    
+    # Register the handler
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+    
+    # Start server on Port 80
+    web.run_app(app, host="0.0.0.0", port=80)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
