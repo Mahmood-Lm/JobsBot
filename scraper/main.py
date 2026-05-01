@@ -63,6 +63,17 @@ def lambda_handler(event, lambda_context):
             if not new_jobs:
                 print("No new jobs found. Sleeping.")
                 continue 
+
+            # --- SAFETY VALVE: THE BACKLOG SLICER ---
+            MAX_JOBS = 10 # Max jobs to process in one batch to avoid Lambda timeouts and AI overuse
+            if len(new_jobs) > MAX_JOBS:
+                print(f"Backlog detected! Processing top {MAX_JOBS}, silently ignoring the remaining {len(new_jobs) - MAX_JOBS}.")
+                # Save the ignored jobs to DynamoDB so they don't haunt us next time
+                for _, user_job_id in new_jobs[MAX_JOBS:]: #TODO: could save the jobs to table without sending alerts if an error occurs
+                    jobs_table.put_item(Item={'user_job_id': user_job_id})
+                
+                # Truncate the list for processing
+                new_jobs = new_jobs[:MAX_JOBS]
             
             # flag to track AI health
             ai_credits_exhausted = False
@@ -104,7 +115,7 @@ def lambda_handler(event, lambda_context):
                     try:
                         ai_start_time = time.time()
                         response = ai_client.models.generate_content(
-                            model='gemma-4-31b-it',
+                            model='gemini-3.1-flash-lite',
                             contents=prompt
                         )
                         ai_end_time = time.time()
