@@ -153,10 +153,19 @@ resource "aws_lambda_function" "bot_lambda" {
 }
 
 # --- 5. THE QUEUE (Amazon SQS) ---
+# dead letter queue to hold failed messages for later analysis
+resource "aws_sqs_queue" "dlq" {
+  name = "linkedin-scraper-dlq"
+}
+
 resource "aws_sqs_queue" "scraper_queue" {
   name                       = "linkedin-scraper-queue"
-  visibility_timeout_seconds = 180 # Must be equal to or greater than the Scraper Lambda timeout
+  visibility_timeout_seconds = 200 # Must be equal to or greater than the Scraper Lambda timeout
   message_retention_seconds  = 86400 # Hold failed messages for 1 day
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.dlq.arn
+    maxReceiveCount     = 3 # After 3 fails, send to DLQ
+  })
 }
 
 
