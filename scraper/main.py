@@ -80,6 +80,13 @@ def lambda_handler(event, lambda_context):
             final_message = f"🚨 <b>{len(new_jobs)} New Jobs Found!</b> 🚨\n\n"
             
             for job, user_job_id in new_jobs:
+                # --- SAFETY VALVE 2: THE TIME-AWARE LOOP ---
+                time_left_ms = lambda_context.get_remaining_time_in_millis()
+                if time_left_ms < 30000:
+                    print(f"CRITICAL: Only {time_left_ms}ms left! Bailing out to send message before timeout.")
+                    final_message += "⚠️ <i>Execution time running out. Remaining jobs skipped in this alert.</i>\n"
+                    break # Break the loop, send what we have!
+
                 job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
                 
                 if cv_profile and not ai_credits_exhausted:
