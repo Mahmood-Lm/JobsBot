@@ -1,15 +1,18 @@
 provider "aws" { region = var.aws_region }
 
-# --- 0. NETWORK AUTO-DISCOVERY ---
+# --- 0. NETWORK AUTO-DISCOVERY (Multi-AZ) ---
 data "aws_vpc" "default" {
   default = true
 }
 
-data "aws_subnets" "all" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
+data "aws_subnet" "zone_a" {
+  vpc_id            = data.aws_vpc.default.id
+  availability_zone = "${var.aws_region}a" 
+}
+
+data "aws_subnet" "zone_b" {
+  vpc_id            = data.aws_vpc.default.id
+  availability_zone = "${var.aws_region}b"
 }
 
 # --- 1. ECR REPOSITORIES ---
@@ -27,42 +30,42 @@ resource "aws_dynamodb_table" "subscriptions_table" {
   name         = "Subscriptions-V2"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "subscription_id"
-  attribute { 
-   name = "subscription_id"
-   type = "S" 
-   }
+  attribute {
+    name = "subscription_id"
+    type = "S"
+    }
 }
 
 resource "aws_dynamodb_table" "seen_jobs_table" {
   name         = "SeenJobs-V2"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "user_job_id"
-  attribute { 
-   name = "user_job_id"
-   type = "S" 
-   }
+  attribute {
+    name = "user_job_id"
+    type = "S"
+    }
 }
 
 resource "aws_dynamodb_table" "users_table" {
   name           = "Users-V2"
   billing_mode   = "PAY_PER_REQUEST"
   hash_key       = "chat_id"
-  attribute { 
-   name = "chat_id"
-   type = "S" 
-   }
+  attribute {
+    name = "chat_id"
+    type = "S"
+    }
 }
 
-# --- 3. BOT INFRASTRUCTURE (ALB + ASG) ---
-resource "aws_security_group" "ec2_sg" {
-  name        = "telegram-bot-v2-sg"
-  description = "Allow inbound Port 80 for Webhooks, all outbound"
+# --- 3. SECURITY GROUPS (The Fix) ---
+resource "aws_security_group" "alb_sg" {
+  name        = "job-bot-alb-sg"
+  description = "Allow inbound web traffic to the ALB from CloudFront/Internet"
   
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 
   egress {
@@ -73,6 +76,26 @@ resource "aws_security_group" "ec2_sg" {
   }
 }
 
+resource "aws_security_group" "ec2_sg" {
+  name        = "telegram-bot-v2-sg"
+  description = "Allow inbound Port 80 for Webhooks, all outbound" # Incorrect description, but let's not waste time changing it now
+  
+  ingress {
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id] # The Magic Lock
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# --- 4. BOT INFRASTRUCTURE (ALB + ASG) ---
 resource "aws_iam_role" "ec2_role" {
   name = "telegram_bot_v2_ec2_role"
   assume_role_policy = jsonencode({
@@ -108,6 +131,7 @@ data "aws_ami" "ubuntu" {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
   }
+
   owners = ["099720109477"]
 }
 
@@ -116,8 +140,8 @@ resource "aws_lb" "bot_alb" {
   name               = "job-bot-alb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.ec2_sg.id]
-  subnets            = data.aws_subnets.all.ids
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = [data.aws_subnet.zone_a.id, data.aws_subnet.zone_b.id]
 }
 
 resource "aws_lb_target_group" "bot_tg" {
@@ -161,7 +185,7 @@ resource "aws_launch_template" "bot_template" {
               docker run -d --name bot -p 80:80 --restart unless-stopped \
                 -e TELEGRAM_TOKEN="${var.telegram_token}" \
                 -e GEMINI_API_KEY="${var.gemini_api_key}" \
-                -e WEBHOOK_URL="http://${aws_lb.bot_alb.dns_name}" \
+                -e WEBHOOK_URL="https://${aws_cloudfront_distribution.bot_cdn.domain_name}" \
                 -e SUBSCRIPTIONS_TABLE="${aws_dynamodb_table.subscriptions_table.name}" \
                 -e USERS_TABLE="${aws_dynamodb_table.users_table.name}" \
                 -e AWS_DEFAULT_REGION="${var.aws_region}" \
@@ -177,7 +201,7 @@ resource "aws_autoscaling_group" "bot_asg" {
   max_size            = 3
   min_size            = 1
   target_group_arns   = [aws_lb_target_group.bot_tg.arn]
-  vpc_zone_identifier = data.aws_subnets.all.ids
+  vpc_zone_identifier = [data.aws_subnet.zone_a.id, data.aws_subnet.zone_b.id]
 
   launch_template {
     id      = aws_launch_template.bot_template.id
@@ -192,7 +216,66 @@ resource "aws_autoscaling_group" "bot_asg" {
   }
 }
 
-# --- 4. LAMBDA SCRAPER INFRASTRUCTURE ---
+# Dynamic Scaling Policy based on Traffic
+resource "aws_autoscaling_policy" "bot_scaling_policy" {
+  name                   = "bot-alb-scaling"
+  policy_type            = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.bot_asg.name
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.bot_alb.arn_suffix}/${aws_lb_target_group.bot_tg.arn_suffix}"
+    }
+    target_value = 500.0 # Spin up a new bot if we hit 500 requests per minute per bot
+  }
+}
+
+# --- 5. CLOUDFRONT CDN (Free HTTPS Proxy for Webhooks) ---
+resource "aws_cloudfront_distribution" "bot_cdn" {
+  enabled             = true
+  is_ipv6_enabled     = true
+  price_class         = "PriceClass_100" 
+
+  origin {
+    domain_name = aws_lb.bot_alb.dns_name
+    origin_id   = "BotALB"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only" 
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  default_cache_behavior {
+    allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "BotALB"
+
+    viewer_protocol_policy = "redirect-to-https" 
+
+    min_ttl     = 0
+    default_ttl = 0
+    max_ttl     = 0
+
+    forwarded_values {
+      query_string = true
+      cookies { forward = "all" }
+    }
+  }
+
+  restrictions {
+    geo_restriction { restriction_type = "none" }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true 
+  }
+}
+
+# --- 6. LAMBDA SCRAPER INFRASTRUCTURE ---
 resource "aws_iam_role" "lambda_role" {
   name = "linkedin_scraper_v2_lambda_role"
   assume_role_policy = jsonencode({
@@ -213,7 +296,7 @@ resource "aws_lambda_function" "bot_lambda" {
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.scraper_repo.repository_url}:latest"
   memory_size   = 2048
-  timeout       = 180 # 3 minutes, to handle LinkedIn + Gemini latency spikes
+  timeout       = 360 
   environment {
     variables = {
       TELEGRAM_TOKEN = var.telegram_token
@@ -224,17 +307,17 @@ resource "aws_lambda_function" "bot_lambda" {
   }
 }
 
-# --- 5. THE QUEUE (Amazon SQS) ---
+# --- 7. THE QUEUE (Amazon SQS) ---
 resource "aws_sqs_queue" "dlq" {
   name = "linkedin-scraper-dlq"
 }
 resource "aws_sqs_queue" "scraper_queue" {
   name                       = "linkedin-scraper-queue"
-  visibility_timeout_seconds = 200 # 3 minutes 20 seconds, to give the Lambda enough time to process before the message becomes visible again
-  message_retention_seconds  = 86400 # keep messages for 1 day to allow for retries and debugging
+  visibility_timeout_seconds = 400
+  message_retention_seconds  = 86400
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
-    maxReceiveCount     = 3 # After 3 failed processing attempts, messages go to the DLQ for later analysis
+    maxReceiveCount     = 3
   })
 }
 resource "aws_lambda_event_source_mapping" "sqs_to_scraper" {
@@ -247,7 +330,7 @@ resource "aws_iam_role_policy_attachment" "lambda_sqs_read" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
 }
 
-# --- 6. THE DISPATCHER LAMBDA ---
+# --- 8. THE DISPATCHER LAMBDA ---
 resource "aws_iam_role" "dispatcher_role" {
   name = "linkedin_dispatcher_role"
   assume_role_policy = jsonencode({
@@ -308,7 +391,7 @@ resource "aws_lambda_permission" "allow_eventbridge_dispatcher" {
   source_arn    = aws_cloudwatch_event_rule.every_minute.arn
 }
 
-output "bot_webhook_url" {
-  description = "The ALB DNS Name handling Telegram traffic"
-  value       = aws_lb.bot_alb.dns_name
+output "bot_cloudfront_url" {
+  description = "The HTTPS Webhook URL for Telegram"
+  value       = "https://${aws_cloudfront_distribution.bot_cdn.domain_name}"
 }

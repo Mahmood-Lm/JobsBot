@@ -344,6 +344,15 @@ def main():
     dp.startup.register(on_startup)
     
     app = web.Application()
+
+    # --- THE AWS ALB HEALTH CHECK ---
+    # The Load balancer will ping this every 30 seconds to ensure the bot is alive.
+    async def health_check(request):
+        return web.Response(text="200 OK - Bot is alive!", status=200)
+    
+    # Attach the health check to the root path
+    app.router.add_get('/', health_check)
+    
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
