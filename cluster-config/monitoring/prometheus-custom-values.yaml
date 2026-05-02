@@ -1,0 +1,19 @@
+  prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs:
+      - job_name: 'job-bot-business-metrics'
+        ec2_sd_configs:
+          - region: eu-central-1
+            port: 80
+            filters:
+              - name: tag:aws:autoscaling:groupName
+                values:
+                  - job-bot-asg
+      - job_name: 'job-bot-hardware-metrics'
+        ec2_sd_configs:
+          - region: eu-central-1
+            port: 9100
+            filters:
+              - name: tag:aws:autoscaling:groupName
+                values:
+                  - job-bot-asg

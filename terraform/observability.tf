@@ -32,6 +32,14 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
   }
 
+  ingress {
+    description = "Kubernetes API Access for Terraform"
+    from_port   = 6443
+    to_port     = 6443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # For production, restrict this to YOUR home IP address
+  }
+
   # Allow Grafana UI (Replace 0.0.0.0/0 with your home IP later!)
   ingress {
     from_port   = 3000
@@ -40,13 +48,6 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] 
   }
 
-  # Allow K3s API access
-  ingress {
-    from_port   = 6443
-    to_port     = 6443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   egress {
     from_port   = 0
