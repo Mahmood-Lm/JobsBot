@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 import uuid
 import boto3
 import urllib.parse
@@ -11,6 +12,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 
 # --- NEW WEBHOOK IMPORTS ---
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -21,6 +23,12 @@ SUBSCRIPTIONS_TABLE = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
 USERS_TABLE = os.getenv("USERS_TABLE", "Users-V2")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# --- PROMETHEUS METRICS ---
+# This counts every time a user hits the /start menu
+START_COMMAND_COUNTER = Counter('bot_start_commands_total', 'Total /start commands received')
+# This counts every time a CV is uploaded
+CV_UPLOAD_COUNTER = Counter('bot_cv_uploads_total', 'Total CVs uploaded for distillation')
 
 # --- WEBHOOK CONFIGURATION ---
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
@@ -69,6 +77,7 @@ def back_keyboard():
 # --- 1. THE MAIN MENU ---
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
+    START_COMMAND_COUNTER.inc()  # Increment the /start command counter
     await state.clear()
     await message.answer(
         "👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", 
@@ -267,6 +276,7 @@ async def process_delete(callback_query: types.CallbackQuery):
 # --- 4. CV UPLOAD & AI DISTILLATION FLOW ---
 @dp.message(F.document)
 async def handle_cv_upload(message: types.Message):
+    CV_UPLOAD_COUNTER.inc()  # Increment the CV upload counter
     if not message.document.file_name.lower().endswith('.pdf'):
         await message.answer("❌ Please upload your CV as a PDF file.")
         return
@@ -301,11 +311,14 @@ async def handle_cv_upload(message: types.Message):
         Raw CV Text:
         {raw_text}
         """
-        
+        cv_start_time = time.time()
         response = ai_client.models.generate_content(
             model='gemma-4-31b-it',
             contents=prompt
         )
+        cv_end_time = time.time()
+        print(f"DEBUG - CV distillation took {cv_end_time - cv_start_time:.2f} seconds.")
+
         distilled_profile = response.text
         
         users_table.put_item(
@@ -352,6 +365,11 @@ def main():
     
     # Attach the health check to the root path
     app.router.add_get('/', health_check)
+
+    # 2. Prometheus Metrics Endpoint
+    async def metrics_handler(request):
+        return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+    app.router.add_get('/metrics', metrics_handler)
     
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
