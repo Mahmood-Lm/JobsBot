@@ -24,21 +24,13 @@ resource "aws_security_group" "observability_sg" {
   name        = "observability-k3s-sg"
   description = "Security group for the K3s Monitoring Server"
 
-  # Allow Bot to send logs to Logstash
-  # ingress {
-  #   from_port       = 5044
-  #   to_port         = 5044
-  #   protocol        = "tcp"
-  #   security_groups = [aws_security_group.ec2_sg.id] 
-  # }
-
-  # Allow Bot to send metrics to Prometheus
-  # ingress {
-  #   from_port       = 9090
-  #   to_port         = 9090
-  #   protocol        = "tcp"
-  #   security_groups = [aws_security_group.ec2_sg.id]
-  # }
+  # Prometheus web UI (External Access)
+  ingress {
+    from_port   = 9090
+    to_port     = 9090
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
+  }
 
   # Allow Grafana UI (Replace 0.0.0.0/0 with your home IP later!)
   ingress {
@@ -64,6 +56,23 @@ resource "aws_security_group" "observability_sg" {
   }
 }
 
+resource "aws_security_group_rule" "observability_logstash_from_ec2" {
+  type                     = "ingress"
+  from_port                = 5044
+  to_port                  = 5044
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.observability_sg.id
+  source_security_group_id = aws_security_group.ec2_sg.id
+}
+
+resource "aws_security_group_rule" "observability_prometheus_from_ec2" {
+  type                     = "ingress"
+  from_port                = 9090
+  to_port                  = 9090
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.observability_sg.id
+  source_security_group_id = aws_security_group.ec2_sg.id
+}
 
 # --- 3. THE K3S SERVER ---
 resource "aws_instance" "observability_server" {
@@ -73,7 +82,7 @@ resource "aws_instance" "observability_server" {
   vpc_security_group_ids = [aws_security_group.observability_sg.id]
   
   root_block_device {
-    volume_size = 20
+    volume_size = 50
     volume_type = "gp3"
   }
 
@@ -81,7 +90,10 @@ resource "aws_instance" "observability_server" {
               #!/bin/bash
               apt-get update -y
               curl -sfL https://get.k3s.io | sh -
-              
+
+              # Wait for K3s to generate the config file
+              while [ ! -f /etc/rancher/k3s/k3s.yaml ]; do sleep 2; done
+
               mkdir -p /home/ubuntu/.kube
               cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
               chown -R ubuntu:ubuntu /home/ubuntu/.kube

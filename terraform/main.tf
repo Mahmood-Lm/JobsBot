@@ -87,6 +87,24 @@ resource "aws_security_group" "ec2_sg" {
     security_groups = [aws_security_group.alb_sg.id] # The Magic Lock
   }
 
+  # --- Allow Prometheus to scrape bot metrics ---
+  ingress {
+    description     = "Traffic from the Observability Server"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.observability_sg.id] 
+  }
+
+  # --- Allow Prometheus to scrape Hardware Metrics ---
+  ingress {
+    description     = "Node Exporter from Observability Server"
+    from_port       = 9100
+    to_port         = 9100
+    protocol        = "tcp"
+    security_groups = [aws_security_group.observability_sg.id] 
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -182,6 +200,7 @@ resource "aws_launch_template" "bot_template" {
               
               aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin ${aws_ecr_repository.bot_repo.repository_url}
               
+              # Start the Telegram Bot (Port 80)
               docker run -d --name bot -p 80:80 --restart unless-stopped \
                 -e TELEGRAM_TOKEN="${var.telegram_token}" \
                 -e GEMINI_API_KEY="${var.gemini_api_key}" \
@@ -190,6 +209,16 @@ resource "aws_launch_template" "bot_template" {
                 -e USERS_TABLE="${aws_dynamodb_table.users_table.name}" \
                 -e AWS_DEFAULT_REGION="${var.aws_region}" \
                 ${aws_ecr_repository.bot_repo.repository_url}:latest
+
+              # Start Node Exporter for Hardware Metrics (Port 9100)
+              docker run -d --name node-exporter \
+                --net="host" \
+                --pid="host" \
+                -v "/:/host:ro,rslave" \
+                --restart unless-stopped \
+                quay.io/prometheus/node-exporter:latest \
+                --path.rootfs=/host
+
               EOF
   )
 }
