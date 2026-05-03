@@ -63,6 +63,53 @@ values = [
           syncOptions:
             - CreateNamespace=true
             - ServerSideApply=true
+
+    # --- ELASTICSEARCH ---
+    elasticsearch:               
+      namespace: argocd
+      project: default
+      sources:
+        - repoURL: 'https://helm.elastic.co'
+          chart: elasticsearch
+          targetRevision: 8.5.1
+          helm:
+            valueFiles:
+              - $values/cluster-config/logging/elastic-values.yaml
+        - repoURL: 'https://github.com/Mahmood-Lm/JobsBot.git'
+          targetRevision: HEAD
+          ref: values 
+      destination:
+        server: 'https://kubernetes.default.svc'
+        namespace: logging
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true 
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+
+    # --- KIBANA ---
+    kibana:               
+      namespace: argocd
+      project: default
+      sources:
+        - repoURL: 'https://helm.elastic.co'
+          chart: kibana
+          targetRevision: 8.5.1
+          helm:
+            valueFiles:
+              - $values/cluster-config/logging/kibana-values.yaml
+        - repoURL: 'https://github.com/Mahmood-Lm/JobsBot.git'
+          targetRevision: HEAD
+          ref: values 
+      destination:
+        server: 'https://kubernetes.default.svc'
+        namespace: logging
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
     EOF
   ]
 }

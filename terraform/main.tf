@@ -219,6 +219,25 @@ resource "aws_launch_template" "bot_template" {
                 quay.io/prometheus/node-exporter:latest \
                 --path.rootfs=/host
 
+              # --- INSTALL FILEBEAT ---
+              curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.12.2-amd64.deb
+              dpkg -i filebeat-8.12.2-amd64.deb
+
+              # --- CONFIGURE FILEBEAT ---
+              cat << 'FILEBEAT' > /etc/filebeat/filebeat.yml
+              filebeat.inputs:
+                - type: container
+                  paths:
+                    - '/var/lib/docker/containers/*/*.log'
+
+              output.logstash:
+                # Replace with the private IP of your observability server or a DNS record
+                hosts: ["${aws_instance.observability_server.private_ip}:30092"]
+              FILEBEAT
+
+              systemctl enable filebeat
+              systemctl start filebeat
+
               EOF
   )
 }

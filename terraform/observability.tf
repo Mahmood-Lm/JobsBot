@@ -46,6 +46,22 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
   }
 
+  # Kibana web UI external access
+  ingress {
+    from_port   = 30056 
+    to_port     = 30056
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
+  }
+
+  # Allow Bot instances to send logs to Elasticsearch
+  ingress {
+    from_port   = 30092
+    to_port     = 30092
+    protocol    = "tcp"
+    security_groups = [aws_security_group.ec2_sg.id] # Only allow from EC2 instances with the right SG
+  }
+
   # Allow ArgoCD external Web UI access (NodePort 30443)
   ingress {
     from_port   = 30443 

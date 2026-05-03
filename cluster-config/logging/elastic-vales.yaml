@@ -1,0 +1,31 @@
+replicas: 1
+minimumMasterNodes: 1
+esJavaOpts: "-Xmx1g -Xms1g"
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "1Gi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+volumeClaimTemplate:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: "local-path"
+  resources:
+    requests:
+      storage: 5Gi
+
+# --- ADD THIS RECEIVING DOCK ---
+# This disables security purely for local dev testing 
+# (In prod, we would strictly use TLS certificates)
+antiAffinity: "soft"
+protocol: http
+esConfig:
+  elasticsearch.yml: |
+    xpack.security.enabled: false
+
+service:
+  type: NodePort
+  nodePort: 30092

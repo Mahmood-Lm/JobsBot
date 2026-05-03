@@ -1,0 +1,12 @@
+resources:
+  requests:
+    cpu: "100m"
+    memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "1Gi"
+
+# Give Kibana a permanent front door just like Grafana
+service:
+  type: NodePort
+  nodePort: 30056
