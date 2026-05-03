@@ -1,19 +1,32 @@
-  prometheus:
-    prometheusSpec:
-      additionalScrapeConfigs:
-        - job_name: 'job-bot-business-metrics'
-          ec2_sd_configs:
-            - region: eu-central-1
-              port: 80
-              filters:
-                - name: tag:aws:autoscaling:groupName
-                  values:
-                    - job-bot-asg
-        - job_name: 'job-bot-hardware-metrics'
-          ec2_sd_configs:
-            - region: eu-central-1
-              port: 9100
-              filters:
-                - name: tag:aws:autoscaling:groupName
-                  values:
-                    - job-bot-asg
+# 1. Permanent Port for Grafana UI
+grafana:
+  service:
+    type: NodePort
+    nodePort: 30000
+
+# 2. Prometheus Configuration
+prometheus:
+  prometheusSpec:
+    # This exposes the Prometheus UI on a permanent port
+    service:
+      type: NodePort
+      nodePort: 30090
+      
+    # Your Bot Scraping Logic
+    additionalScrapeConfigs:
+      - job_name: 'job-bot-business-metrics'
+        ec2_sd_configs:
+          - region: eu-central-1
+            port: 80
+            filters:
+              - name: tag:aws:autoscaling:groupName
+                values:
+                  - job-bot-asg
+      - job_name: 'job-bot-hardware-metrics'
+        ec2_sd_configs:
+          - region: eu-central-1
+            port: 9100
+            filters:
+              - name: tag:aws:autoscaling:groupName
+                values:
+                  - job-bot-asg

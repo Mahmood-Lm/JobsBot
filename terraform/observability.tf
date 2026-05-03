@@ -24,13 +24,22 @@ resource "aws_security_group" "observability_sg" {
   name        = "observability-k3s-sg"
   description = "Security group for the K3s Monitoring Server"
 
-  # Prometheus web UI (External Access)
+  # Prometheus web UI
   ingress {
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
   }
+
+  # Prometheus web UI external access
+  ingress {
+    from_port   = 30090 
+    to_port     = 30090
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
+  }
+
 
   ingress {
     description = "Kubernetes API Access for Terraform"
@@ -55,6 +64,15 @@ resource "aws_security_group" "observability_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] 
   }
+
+  # Allow Grafana UI external access
+  ingress {
+    from_port   = 30000
+    to_port     = 30000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] 
+  }
+
 
 
   egress {
