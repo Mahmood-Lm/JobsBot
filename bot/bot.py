@@ -368,8 +368,10 @@ def main():
 
     # 2. Prometheus Metrics Endpoint
     async def metrics_handler(request):
-        return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
-    app.router.add_get('/metrics', metrics_handler)
+        return web.Response(
+            body=generate_latest(), 
+            headers={"Content-Type": CONTENT_TYPE_LATEST}
+        )
     
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
