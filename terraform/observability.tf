@@ -13,6 +13,12 @@ resource "aws_iam_role_policy_attachment" "observability_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Attach EC2 Read Only policy so Prometheus can discover EC2 targets for scraping
+resource "aws_iam_role_policy_attachment" "observability_ec2_readonly" {
+  role       = aws_iam_role.observability_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess"
+}
+
 resource "aws_iam_instance_profile" "observability_profile" {
   name = "k3s_observability_profile"
   role = aws_iam_role.observability_role.name
