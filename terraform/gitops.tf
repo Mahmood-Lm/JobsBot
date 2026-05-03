@@ -110,6 +110,28 @@ values = [
           automated:
             prune: true
             selfHeal: true
+            
+      # --- LOGSTASH ---
+      logstash:               
+        namespace: argocd
+        project: default
+        sources:
+          - repoURL: 'https://helm.elastic.co'
+            chart: logstash
+            targetRevision: 8.5.1
+            helm:
+              valueFiles:
+                - $values/cluster-config/logging/logstash-values.yaml
+          - repoURL: 'https://github.com/Mahmood-Lm/JobsBot.git'
+            targetRevision: HEAD
+            ref: values 
+        destination:
+          server: 'https://kubernetes.default.svc'
+          namespace: logging
+        syncPolicy:
+          automated:
+            prune: true
+            selfHeal: true
     EOF
   ]
 }

@@ -1,0 +1,35 @@
+service:
+  type: NodePort
+  ports:
+    - name: beats
+      port: 5044
+      targetPort: 5044
+      # Expose externally as 30092 to match Filebeat & Security Groups
+      nodePort: 30092 
+      protocol: TCP
+
+logstashPipeline:
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch-master:9200"]
+        user => "${ELASTICSEARCH_USERNAME}"
+        password => "${ELASTICSEARCH_PASSWORD}"
+        ssl_certificate_verification => false
+        index => "bot-logs-%{+YYYY.MM.dd}"
+      }
+    }
+
+extraEnvs:
+  - name: ELASTICSEARCH_USERNAME
+    value: "elastic"
+  - name: ELASTICSEARCH_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: elasticsearch-master-credentials
+        key: password
