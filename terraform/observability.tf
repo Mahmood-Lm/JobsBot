@@ -40,6 +40,14 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] # For production, restrict this to YOUR home IP address
   }
 
+  ingress {
+    description = "ArgoCD Web UI Tunnel"
+    from_port   = 8888
+    to_port     = 8888
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Restrict to your IP if you want to be strictly secure
+  }
+
   # Allow Grafana UI (Replace 0.0.0.0/0 with your home IP later!)
   ingress {
     from_port   = 3000
