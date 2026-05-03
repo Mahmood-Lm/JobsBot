@@ -6,12 +6,12 @@ grafana:
 
 # 2. Prometheus Configuration
 prometheus:
+  # This exposes the Prometheus UI on a permanent port
+  service:
+    type: NodePort
+    nodePort: 30090
+
   prometheusSpec:
-    # This exposes the Prometheus UI on a permanent port
-    service:
-      type: NodePort
-      nodePort: 30090
-      
     # Your Bot Scraping Logic
     additionalScrapeConfigs:
       - job_name: 'job-bot-business-metrics'

@@ -40,6 +40,14 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
   }
 
+  # Allow ArgoCD external Web UI access (NodePort 30443)
+  ingress {
+    from_port   = 30443 
+    to_port     = 30443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
+  }
+
 
   ingress {
     description = "Kubernetes API Access for Terraform"
