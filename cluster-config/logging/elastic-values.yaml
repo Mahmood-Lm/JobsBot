@@ -21,6 +21,3 @@ volumeClaimTemplate:
       storage: 5Gi
 
 antiAffinity: "soft"
-service:
-  type: NodePort
-  nodePort: 30092
