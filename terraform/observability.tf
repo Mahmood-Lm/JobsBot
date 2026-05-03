@@ -54,14 +54,6 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
   }
 
-  # Allow Bot instances to send logs to Elasticsearch
-  ingress {
-    from_port   = 30092
-    to_port     = 30092
-    protocol    = "tcp"
-    security_groups = [aws_security_group.ec2_sg.id] # Only allow from EC2 instances with the right SG
-  }
-
   # Allow ArgoCD external Web UI access (NodePort 30443)
   ingress {
     from_port   = 30443 
@@ -69,7 +61,6 @@ resource "aws_security_group" "observability_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] # Replace with your home IP later!
   }
-
 
   ingress {
     description = "Kubernetes API Access for Terraform"
@@ -126,6 +117,15 @@ resource "aws_security_group_rule" "observability_prometheus_from_ec2" {
   type                     = "ingress"
   from_port                = 9090
   to_port                  = 9090
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.observability_sg.id
+  source_security_group_id = aws_security_group.ec2_sg.id
+}
+
+resource "aws_security_group_rule" "observability_elasticsearch_from_ec2" {
+  type                     = "ingress"
+  from_port                = 30092
+  to_port                  = 30092
   protocol                 = "tcp"
   security_group_id        = aws_security_group.observability_sg.id
   source_security_group_id = aws_security_group.ec2_sg.id
