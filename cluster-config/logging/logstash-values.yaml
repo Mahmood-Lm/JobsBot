@@ -30,6 +30,12 @@ logstashPipeline:
     input {
       beats {
         port => 30092
+        type => "ec2-bot"
+      }
+      cloudwatch_logs {
+        log_group => [ "/aws/lambda/linkedin-scraper-function-v2" ]
+        region => "eu-central-1"
+        type => "lambda-scraper"
       }
     }
     output {
