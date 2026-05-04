@@ -7,20 +7,24 @@ service:
       nodePort: 30092 
       protocol: TCP
 
-# Mount the password into the pod as a file
-secretMounts:
-  - name: elasticsearch-master-credentials
-    secretName: elasticsearch-master-credentials
-    path: /usr/share/logstash/config/certs
+# Inject the password securely as an environment variable
+extraEnvs:
+  - name: ELASTICSEARCH_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: elasticsearch-master-credentials
+        key: password
 
+# Use the environment variable for monitoring
 logstashConfig:
   logstash.yml: |
     http.host: "0.0.0.0"
     xpack.monitoring.elasticsearch.hosts: [ "https://elasticsearch-master:9200" ]
     xpack.monitoring.elasticsearch.username: "elastic"
-    xpack.monitoring.elasticsearch.password: "${cat /usr/share/logstash/config/certs/password}"
+    xpack.monitoring.elasticsearch.password: "${ELASTICSEARCH_PASSWORD}"
     xpack.monitoring.elasticsearch.ssl.verification_mode: none
 
+# Use the environment variable for the pipeline
 logstashPipeline:
   logstash.conf: |
     input {
@@ -32,7 +36,7 @@ logstashPipeline:
       elasticsearch {
         hosts => ["https://elasticsearch-master:9200"]
         user => "elastic"
-        password => "${cat /usr/share/logstash/config/certs/password}"
+        password => "${ELASTICSEARCH_PASSWORD}"
         ssl_certificate_verification => false
         index => "bot-logs-%{+YYYY.MM.dd}"
       }
