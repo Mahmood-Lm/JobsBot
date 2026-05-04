@@ -1,0 +1,21 @@
+daemonset:
+  # We do not need a Filebeat pod on every single node, just one deployment to fetch logs
+  enabled: false
+
+deployment:
+  enabled: true
+  replicas: 1
+
+# Filebeat configuration
+filebeatConfig:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: aws-cloudwatch
+        log_group_name: "/aws/lambda/linkedin-scraper-function-v2"
+        region: "eu-central-1"
+        # Filebeat automatically uses the EC2 Instance Profile IAM role attached via Terraform
+
+    # Forward the logs to your existing Logstash service
+    output.logstash:
+      # Assuming your Logstash helm release is named 'logstash'
+      hosts: ["logstash-logstash:30092"]
