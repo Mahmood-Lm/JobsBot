@@ -232,7 +232,7 @@ resource "aws_launch_template" "bot_template" {
 
               output.logstash:
                 # Replace with the private IP of your observability server or a DNS record
-                hosts: ["${aws_instance.observability_server.private_ip}:5044"]
+                hosts: ["${aws_instance.observability_server.private_ip}:30092"]
               FILEBEAT
 
               systemctl enable filebeat

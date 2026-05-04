@@ -104,15 +104,6 @@ resource "aws_security_group" "observability_sg" {
   }
 }
 
-resource "aws_security_group_rule" "observability_logstash_from_ec2" {
-  type                     = "ingress"
-  from_port                = 5044
-  to_port                  = 5044
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.observability_sg.id
-  source_security_group_id = aws_security_group.ec2_sg.id
-}
-
 resource "aws_security_group_rule" "observability_prometheus_from_ec2" {
   type                     = "ingress"
   from_port                = 9090
