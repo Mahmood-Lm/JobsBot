@@ -4,7 +4,7 @@ service:
     - name: beats
       port: 5044
       targetPort: 5044
-      nodePort: 30092 
+      nodePort: 5044 
       protocol: TCP
 
 # Inject the password securely as an environment variable
