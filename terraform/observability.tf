@@ -94,6 +94,14 @@ resource "aws_security_group" "observability_sg" {
     cidr_blocks = ["0.0.0.0/0"] 
   }
 
+  # Allow Filebeat/Logstash from within the VPC (EC2 Bots)
+  ingress {
+    from_port   = 30092
+    to_port     = 30092
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.default.cidr_block]
+  }
+
 
 
   egress {
@@ -102,24 +110,6 @@ resource "aws_security_group" "observability_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
-
-resource "aws_security_group_rule" "observability_prometheus_from_ec2" {
-  type                     = "ingress"
-  from_port                = 9090
-  to_port                  = 9090
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.observability_sg.id
-  source_security_group_id = aws_security_group.ec2_sg.id
-}
-
-resource "aws_security_group_rule" "observability_elasticsearch_from_ec2" {
-  type                     = "ingress"
-  from_port                = 30092
-  to_port                  = 30092
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.observability_sg.id
-  source_security_group_id = aws_security_group.ec2_sg.id
 }
 
 # --- 3. THE K3S SERVER ---
