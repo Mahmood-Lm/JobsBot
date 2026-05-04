@@ -103,7 +103,7 @@ def lambda_handler(event, lambda_context):
                     time.sleep(5) # AI rate limit safety net
                     
                     prompt = f"""
-                    You are an expert technical recruiter. Evaluate this job match.
+                    You are an expert technical recruiter. Evaluate this job match, addressing the candidate directly (e.g., "You are a strong fit...").
                     
                     CANDIDATE PROFILE:
                     {cv_profile}
@@ -112,11 +112,11 @@ def lambda_handler(event, lambda_context):
                     {job_desc}
                     
                     1. Give a Match Score from 1 to 10.
-                    2. Write a 1-2 sentence summary explaining WHY it is a good or bad match.
+                    2. Write a brief summary (maximum 40 words) explaining WHY it is a good or bad match, using a second-person tone ("You...").
                     
                     Format EXACTLY like this:
                     Score: [Number]/10
-                    Summary: [Your 1-2 sentences]
+                    Summary: [Your summary, max 40 words]
                     """
                     
                     try:
