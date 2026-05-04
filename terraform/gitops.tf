@@ -75,6 +75,9 @@ values = [
             helm:
               valueFiles:
                 - $values/cluster-config/logging/elastic-values.yaml
+              parameters:
+                - name: "secret.password"
+                  value: "${var.elastic_password}"
           - repoURL: 'https://github.com/Mahmood-Lm/JobsBot.git'
             targetRevision: HEAD
             ref: values 

@@ -10,3 +10,8 @@ variable "gemini_api_key" {
   type        = string
   sensitive   = true
 }
+variable "elastic_password" {
+  description = "Static password for Elasticsearch to prevent GitOps drift"
+  type        = string
+  sensitive   = true
+}
