@@ -2,9 +2,9 @@ service:
   type: NodePort
   ports:
     - name: beats
-      port: 5044
-      targetPort: 5044
-      nodePort: 5044 
+      port: 30092
+      targetPort: 30092
+      nodePort: 30092 
       protocol: TCP
 
 # Inject the password securely as an environment variable
@@ -29,7 +29,7 @@ logstashPipeline:
   logstash.conf: |
     input {
       beats {
-        port => 5044
+        port => 30092
       }
     }
     output {
