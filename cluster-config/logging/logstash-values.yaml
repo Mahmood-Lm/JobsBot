@@ -4,11 +4,15 @@ service:
     - name: beats
       port: 5044
       targetPort: 5044
-      # Expose externally as 30092 to match Filebeat & Security Groups
       nodePort: 30092 
       protocol: TCP
 
-# To fix the license checker error
+# Mount the password into the pod as a file
+secretMounts:
+  - name: elasticsearch-master-credentials
+    secretName: elasticsearch-master-credentials
+    path: /usr/share/logstash/config/certs
+
 logstashConfig:
   logstash.yml: |
     http.host: "0.0.0.0"
@@ -27,18 +31,9 @@ logstashPipeline:
     output {
       elasticsearch {
         hosts => ["https://elasticsearch-master:9200"]
-        user => "${ELASTICSEARCH_USERNAME}"
-        password => "${ELASTICSEARCH_PASSWORD}"
+        user => "elastic"
+        password => "${cat /usr/share/logstash/config/certs/password}"
         ssl_certificate_verification => false
         index => "bot-logs-%{+YYYY.MM.dd}"
       }
     }
-
-extraEnvs:
-  - name: ELASTICSEARCH_USERNAME
-    value: "elastic"
-  - name: ELASTICSEARCH_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: elasticsearch-master-credentials
-        key: password
