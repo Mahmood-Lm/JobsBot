@@ -78,6 +78,7 @@ def back_keyboard():
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
     START_COMMAND_COUNTER.inc()  # Increment the /start command counter
+    print(f"INFO - User {message.chat.id} started the bot. Welcome menu sent.", flush=True)
     await state.clear()
     await message.answer(
         "👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", 
@@ -212,6 +213,8 @@ async def capture_freq(callback_query: types.CallbackQuery, state: FSMContext):
             'frequency_minutes': minutes,
             'last_scraped_timestamp': 0 
         })
+        
+        print(f"SUCCESS - User {callback_query.message.chat.id} created a new subscription (Freq: {minutes}m): {data['search_url']}", flush=True)
         await callback_query.message.edit_text(
             "✅ **Link Successfully Added!**\n\nJobs will begin arriving shortly.", 
             parse_mode="Markdown",
@@ -287,12 +290,15 @@ async def handle_cv_upload(message: types.Message):
         file_info = await bot.get_file(message.document.file_id)
         downloaded_file = await bot.download_file(file_info.file_path)
         
+        print(f"INFO - Received CV upload from {message.chat.id}, parsing PDF...", flush=True)
+        
         pdf_reader = PyPDF2.PdfReader(downloaded_file)
         raw_text = ""
         for page in pdf_reader.pages:
             raw_text += page.extract_text() or ""
             
         if not raw_text.strip():
+            print(f"WARN - User {message.chat.id} uploaded an empty or unparseable PDF.", flush=True)
             await processing_msg.edit_text("❌ I couldn't extract any text from this PDF. It might be an image-based scan.")
             return
             
@@ -317,7 +323,7 @@ async def handle_cv_upload(message: types.Message):
             contents=prompt
         )
         cv_end_time = time.time()
-        print(f"DEBUG - CV distillation took {cv_end_time - cv_start_time:.2f} seconds.")
+        print(f"DEBUG - CV distillation took {cv_end_time - cv_start_time:.2f} seconds. (User: {message.chat.id})", flush=True)
 
         distilled_profile = response.text
         

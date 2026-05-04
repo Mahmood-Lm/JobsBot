@@ -208,6 +208,7 @@ resource "aws_launch_template" "bot_template" {
                 -e SUBSCRIPTIONS_TABLE="${aws_dynamodb_table.subscriptions_table.name}" \
                 -e USERS_TABLE="${aws_dynamodb_table.users_table.name}" \
                 -e AWS_DEFAULT_REGION="${var.aws_region}" \
+                -e PYTHONUNBUFFERED=1 \
                 ${aws_ecr_repository.bot_repo.repository_url}:latest
 
               # Start Node Exporter for Hardware Metrics (Port 9100)
