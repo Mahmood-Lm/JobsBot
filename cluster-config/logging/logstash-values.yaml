@@ -8,6 +8,15 @@ service:
       nodePort: 30092 
       protocol: TCP
 
+# To fix the license checker error
+logstashConfig:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    xpack.monitoring.elasticsearch.hosts: [ "https://elasticsearch-master:9200" ]
+    xpack.monitoring.elasticsearch.username: "elastic"
+    xpack.monitoring.elasticsearch.password: "${cat /usr/share/logstash/config/certs/password}"
+    xpack.monitoring.elasticsearch.ssl.verification_mode: none
+
 logstashPipeline:
   logstash.conf: |
     input {
