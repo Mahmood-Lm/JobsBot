@@ -35,6 +35,7 @@ resource "helm_release" "argocd_apps" {
 values = [
     <<-EOF
     applications:
+    # --- PROMETHEUS STACK ---
       prometheus-stack:               
         namespace: argocd
         project: default
@@ -92,7 +93,7 @@ values = [
             - CreateNamespace=true
             - ServerSideApply=true
 
-      # --- KIBANA ---
+      # --- KIBANA (UI) ---
       kibana:               
         namespace: argocd
         project: default

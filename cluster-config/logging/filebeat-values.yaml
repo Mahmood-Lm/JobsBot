@@ -8,7 +8,9 @@ deployment:
 
 # Filebeat configuration
 filebeatConfig:
+  # TODO: Remove debug logs
   filebeat.yml: |
+    logging.level: debug 
     filebeat.inputs:
       - type: aws-cloudwatch
         log_group_name: "/aws/lambda/linkedin-scraper-function-v2"

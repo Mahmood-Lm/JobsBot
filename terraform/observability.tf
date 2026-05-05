@@ -19,7 +19,8 @@ resource "aws_iam_role_policy_attachment" "observability_ec2_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess"
 }
 
-# Add IAM Policy for Logstash to read CloudWatch Logs
+# Add IAM Policy for Logstash to read CloudWatch Logs 
+#TODO: Not needed 
 resource "aws_iam_policy" "observability_cloudwatch_logs" {
   name        = "k3s_observability_cloudwatch_logs"
   description = "Allow Logstash to read CloudWatch Logs from Lambda Scraper"
@@ -29,9 +30,8 @@ resource "aws_iam_policy" "observability_cloudwatch_logs" {
       {
         Effect = "Allow",
         Action = [
-          "logs:DescribeLogGroups",
-          "logs:DescribeLogStreams",
-          "logs:GetLogEvents",
+          "logs:Describe*",
+          "logs:Get*",
           "logs:FilterLogEvents"
         ],
         Resource = "*"
