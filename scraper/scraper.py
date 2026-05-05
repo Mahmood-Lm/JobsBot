@@ -21,7 +21,14 @@ def get_jobs(context, search_url):
                 clean_link = link.split('?')[0] 
                 job_id = clean_link.split('-')[-1]
                 
-                jobs_found.append({"id": job_id, "title": title, "company": company, "link": clean_link})
+                job_obj = {"id": job_id, "title": title, "company": company, "link": clean_link}
+                jobs_found.append(job_obj)
+                print(json.dumps({
+                    "event": "job_found",
+                    "job_title": title,
+                    "company": company
+                }))
+                
             except Exception as e:
                 print(f"ERROR - Error occurred while processing job card: {e}")
                 continue

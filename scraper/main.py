@@ -3,6 +3,7 @@ import time
 import json
 import boto3
 import config
+import json
 from google import genai
 from playwright.sync_api import sync_playwright # <--- We moved Playwright here
 from scraper import get_jobs, get_job_description
