@@ -33,6 +33,7 @@ logstashPipeline:
       beats {
         port => 30092
       }
+    }
     filter {
       if [timestamp] {
         date {
