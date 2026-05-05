@@ -24,12 +24,21 @@ logstashConfig:
     xpack.monitoring.elasticsearch.password: "${ELASTICSEARCH_PASSWORD}"
     xpack.monitoring.elasticsearch.ssl.verification_mode: none
 
-# Use the environment variable for the pipeline
+# If the log came from Filebeat and has a true timestamp in the message payload or metadata,
+# force Logstash to use it as the main Elasticsearch @timestamp.
+# Try to extract the true time from the AWS CloudWatch event data
 logstashPipeline:
   logstash.conf: |
     input {
       beats {
         port => 30092
+      }
+    filter {
+      if [timestamp] {
+        date {
+          match => [ "timestamp", "UNIX_MS" ]
+          target => "@timestamp"
+        }
       }
     }
     output {

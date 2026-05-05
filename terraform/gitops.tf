@@ -158,7 +158,8 @@ values = [
                       - type: aws-cloudwatch
                         log_group_arn: "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/linkedin-scraper-function-v2:*"
                         region: "${var.aws_region}"
-                        start_position: "beginning"
+                        scan_frequency: 1m 
+                        api_timeout: 120s       
                     output.logstash:
                       hosts: ["logstash-logstash:30092"]
           - repoURL: 'https://github.com/Mahmood-Lm/JobsBot.git'
