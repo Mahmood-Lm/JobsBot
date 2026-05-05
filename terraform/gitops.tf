@@ -21,6 +21,8 @@ resource "helm_release" "argocd" {
   }]
 }
 
+data "aws_caller_identity" "current" {}
+
 # --- THE GITOPS BOOTSTRAPPER ---
 # This automatically injects the first GitHub repository into ArgoCD
 resource "helm_release" "argocd_apps" {
@@ -148,9 +150,21 @@ values = [
             helm:
               valueFiles:
                 - $values/cluster-config/logging/filebeat-values.yaml
+              parameters:
+                # Override the entire filebeat.yml content at deploy time
+                - name: "filebeatConfig.filebeat\\.yml"
+                  value: |
+                    filebeat.inputs:
+                      - type: aws-cloudwatch
+                        log_group_arn: "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/linkedin-scraper-function-v2:*"
+                        region: "${var.aws_region}"
+                        start_position: "beginning"
+                    output.logstash:
+                      hosts: ["logstash-logstash:30092"]
           - repoURL: 'https://github.com/Mahmood-Lm/JobsBot.git'
             targetRevision: HEAD
             ref: values 
+            
         destination:
           server: 'https://kubernetes.default.svc'
           namespace: logging
