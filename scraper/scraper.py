@@ -1,3 +1,6 @@
+import json
+
+
 def get_jobs(context, search_url):
     """Opens a tab to scrape the initial job search results."""
     jobs_found = []
