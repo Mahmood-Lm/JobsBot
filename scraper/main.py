@@ -20,7 +20,8 @@ def is_job_seen(user_job_id):
     try:
         response = jobs_table.get_item(Key={'user_job_id': user_job_id})
         return 'Item' in response
-    except Exception:
+    except Exception as e:
+        print(f"ERROR - Error checking job in DB: {e}")
         return False
 
 def get_user_cv(chat_id):
@@ -28,7 +29,7 @@ def get_user_cv(chat_id):
         response = users_table.get_item(Key={'chat_id': str(chat_id)})
         return response.get('Item', {}).get('distilled_cv_profile')
     except Exception as e:
-        print(f"Error fetching CV: {e}")
+        print(f"ERROR - Error fetching CV: {e}")
         return None
 
 def lambda_handler(event, lambda_context):
@@ -90,15 +91,13 @@ def lambda_handler(event, lambda_context):
                 job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
                 
                 if cv_profile and not ai_credits_exhausted:
-                    print(f"DEBUG - Deep scraping {job['title']} for AI analysis...")
                     
                     scrape_start_time = time.time()
-                    
                     # Pass the open browser context to get_job_description!
                     job_desc = get_job_description(playwright_context, job['link'])
-                    
                     scrape_end_time = time.time()
-                    print(f"DEBUG - Scrape took {scrape_end_time - scrape_start_time:.2f} seconds.")
+
+                    print(f"DEBUG - Scraping {user_job_id} at {job['company']} took {scrape_end_time - scrape_start_time:.2f} seconds.")
                     
                     time.sleep(5) # AI rate limit safety net
                     
@@ -130,7 +129,7 @@ def lambda_handler(event, lambda_context):
                         job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
                     except Exception as e:
                         error_msg = str(e).lower()
-                        print(f"AI Generation Failed: {error_msg}")
+                        print(f"ERROR - AI Generation Failed: {error_msg}")
                         job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
                         
                         # If it's a billing/quota error, flip the switch to save the rest of the batch!
@@ -146,7 +145,7 @@ def lambda_handler(event, lambda_context):
                 final_message += job_segment
 
             if send_message(chat_id, final_message.strip()):
-                print(f"Sent batched alert for {len(new_jobs)} jobs. Saving to DB...")
+                print(f"Sent batched alert for {len(new_jobs)} jobs to {chat_id}. Saving to DB...")
                 for _, user_job_id in new_jobs:
                     jobs_table.put_item(Item={'user_job_id': user_job_id})
                     

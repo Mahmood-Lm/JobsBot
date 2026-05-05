@@ -11,5 +11,5 @@ def send_message(chat_id, message):
     }
     response = requests.post(url, json=payload)
     if not response.ok:
-        print(f"Telegram API Error: {response.status_code} - {response.text}")
+        print(f"ERROR - Telegram API Error: {response.status_code} - {response.text}")
     return response.ok
