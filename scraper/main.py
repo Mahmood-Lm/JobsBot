@@ -3,7 +3,7 @@ import time
 import json
 import boto3
 import config
-import json
+import urllib.parse
 from google import genai
 from playwright.sync_api import sync_playwright # <--- We moved Playwright here
 from scraper import get_jobs, get_job_description
@@ -79,7 +79,15 @@ def lambda_handler(event, lambda_context):
             
             # flag to track AI health
             ai_credits_exhausted = False
-            final_message = f"🚨 <b>{len(new_jobs)} New Jobs Found!</b> 🚨\n\n"
+
+            # Extract search criteria from the URL to personalize the alert header
+            parsed_url = urllib.parse.urlparse(search_url)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            search_keywords = query_params.get('keywords', [''])[0]
+            search_location = query_params.get('location', [''])[0]
+
+            header_text = f"{len(new_jobs)} new jobs found" + (f" for {search_keywords}" if search_keywords else "") + (f" in {search_location}" if search_location else "")
+            final_message = f"🚨 <b>{header_text}</b> 🚨\n\n"
             
             for job, user_job_id in new_jobs:
                 # --- SAFETY VALVE 2: THE TIME-AWARE LOOP ---
@@ -89,7 +97,7 @@ def lambda_handler(event, lambda_context):
                     final_message += "⚠️ <i>Execution time running out. Remaining jobs skipped in this alert.</i>\n"
                     break # Break the loop, send what we have!
 
-                job_segment = f"▪️ <b>{job['title']}</b> at {job['company']}\n"
+                job_segment = f"💼 <b>{job['title']}</b>\n🏢 {job['company']}\n"
                 
                 if cv_profile and not ai_credits_exhausted:
                     
@@ -103,31 +111,32 @@ def lambda_handler(event, lambda_context):
                     time.sleep(5) # AI rate limit safety net
                     
                     prompt = f"""
-                    You are an expert technical recruiter. Evaluate this job match, addressing the candidate directly (e.g., "You are a strong fit...").
+                    Evaluate this job match for the candidate. Return ONLY a JSON object with:
+                    - "rating": an integer from 1 to 10.
+                    - "summary": a brief explanation explaining WHY it is a good or bad match (max 40 words) using a second-person tone ("You...").
                     
                     CANDIDATE PROFILE:
                     {cv_profile}
                     
                     JOB DESCRIPTION:
                     {job_desc}
-                    
-                    1. Give a Match Score from 1 to 10.
-                    2. Write a brief summary (maximum 40 words) explaining WHY it is a good or bad match, using a second-person tone ("You...").
-                    
-                    Format EXACTLY like this:
-                    Score: [Number]/10
-                    Summary: [Your summary, max 40 words]
                     """
                     
                     try:
                         ai_start_time = time.time()
                         response = ai_client.models.generate_content(
                             model='gemini-3.1-flash-lite-preview',
-                            contents=prompt
+                            contents=prompt,
+                            config={'response_mime_type': 'application/json'}
                         )
                         ai_end_time = time.time()
                         print(f"DEBUG - AI generation took {ai_end_time - ai_start_time:.2f} seconds.")
-                        job_segment += f"🤖 <b>AI Match Analysis:</b>\n<blockquote>{response.text.strip()}</blockquote>\n"
+
+                        ai_data = json.loads(response.text)
+                        rating = ai_data.get('rating', 'N/A')
+                        summary = ai_data.get('summary', 'Analysis unavailable.')
+
+                        job_segment += f"⭐ <b>Rating: {rating}/10</b>\n<blockquote>{summary}</blockquote>\n"
                     except Exception as e:
                         error_msg = str(e).lower()
                         print(f"ERROR - AI Generation Failed: {error_msg}")
@@ -142,7 +151,7 @@ def lambda_handler(event, lambda_context):
                     # If credits are dead, skip the deep scrape and AI entirely to save time
                     job_segment += "🤖 <i>AI Match Analysis skipped (API Credits Exhausted).</i>\n"
 
-                job_segment += f"<a href='{job['link']}'>Apply Here</a>\n\n"
+                job_segment += f"🔗 <a href='{job['link']}'>Apply Here</a>\n\n"
                 final_message += job_segment
 
             if send_message(chat_id, final_message.strip()):
