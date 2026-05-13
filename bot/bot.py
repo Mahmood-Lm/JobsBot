@@ -7,6 +7,7 @@ import urllib.parse
 import io
 import PyPDF2
 from datetime import datetime
+from timezonefinder import TimezoneFinder
 from google import genai
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -54,11 +55,11 @@ async def ensure_user_exists(chat_id: int):
         new_user = {
             'chat_id': str(chat_id),
             'level': 0,  # Default: free tier
-            'timezone': '',  # Empty until user sets it
+            'timezone': 'CET',  # Default: Central European Time
             'created_at': int(datetime.now().timestamp())
         }
         users_table.put_item(Item=new_user)
-        print(f"INFO - New user {chat_id} created in Users table with level=0", flush=True)
+        print(f"INFO - New user {chat_id} created in Users table with level=0 and timezone=CET", flush=True)
         return new_user
     except Exception as e:
         print(f"ERROR - Failed to ensure user {chat_id} exists: {e}", flush=True)
@@ -69,7 +70,6 @@ class SetupLink(StatesGroup):
     waiting_for_job_title = State()
     waiting_for_location = State()
     waiting_for_frequency = State()
-    waiting_for_timezone = State()
 
 # --- HELPER KEYBOARDS ---
 def main_menu_keyboard():
@@ -98,18 +98,6 @@ def back_keyboard():
         [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back_to_main")]
     ])
 
-def timezone_keyboard():
-    timezones = [
-        ('🇬🇧 CET/GMT', 'tz_CET'), ('🇺🇸 EST', 'tz_EST'), ('🇺🇸 CST', 'tz_CST'), ('🇺🇸 PST', 'tz_PST'),
-        ('🇮🇳 IST', 'tz_IST'), ('🇯🇵 JST', 'tz_JST'), ('🇦🇺 AEST', 'tz_AEST'), ('🇧🇷 BRT', 'tz_BRT'),
-        ('🇲🇽 CST', 'tz_CST_MX'), ('🇳🇿 NZST', 'tz_NZST'), ('🇸🇬 SGT', 'tz_SGT'), ('🇲🇾 MYT', 'tz_MYT'),
-        ('🇴🇦 GST', 'tz_GST'), ('🇿🇦 SAST', 'tz_SAST'), ('🇬🇷 EET', 'tz_EET'), ('🇪🇬 EET', 'tz_EET_EG'),
-    ]
-    buttons = [[InlineKeyboardButton(text=name, callback_data=data)] for name, data in timezones]
-    buttons.append([InlineKeyboardButton(text="✍️ Custom Timezone", callback_data="tz_custom")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Skip for Now", callback_data="tz_skip")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 # --- 1. THE MAIN MENU ---
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
@@ -118,23 +106,14 @@ async def send_welcome(message: types.Message, state: FSMContext):
     print(f"INFO - User {chat_id} started the bot. Welcome menu sent.", flush=True)
     await state.clear()
     
-    # Ensure user exists in database
-    user = await ensure_user_exists(chat_id)
+    # Ensure user exists in database (defaults to CET timezone)
+    await ensure_user_exists(chat_id)
     
-    # Check if user has a timezone set
-    if user and not user.get('timezone'):
-        # User doesn't have timezone, prompt them
-        await message.answer(
-            "👋 Welcome to JobBot SaaS!\n\n⏰ First, let's set your timezone so job alerts arrive at the right time:",
-            reply_markup=timezone_keyboard()
-        )
-        await state.set_state(SetupLink.waiting_for_timezone)
-    else:
-        # User already has timezone set, show main menu
-        await message.answer(
-            "👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", 
-            reply_markup=main_menu_keyboard()
-        )
+    # Show main menu
+    await message.answer(
+        "👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?", 
+        reply_markup=main_menu_keyboard()
+    )
 
 @dp.callback_query(F.data == 'back_to_main')
 async def back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
@@ -145,78 +124,39 @@ async def back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
     )
     await callback_query.answer()
 
-# --- TIMEZONE SELECTION FLOW ---
-@dp.callback_query(F.data.startswith('tz_'))
-async def handle_timezone_selection(callback_query: types.CallbackQuery, state: FSMContext):
-    timezone_data = callback_query.data
-    chat_id = str(callback_query.message.chat.id)
+# --- LOCATION SHARING: AUTO-DETECT TIMEZONE ---
+@dp.message(F.location)
+async def handle_location_share(message: types.Message):
+    """Update user's timezone based on shared GPS location."""
+    chat_id = str(message.chat.id)
+    latitude = message.location.latitude
+    longitude = message.location.longitude
     
-    if timezone_data == 'tz_skip':
-        # Skip timezone setup
-        await callback_query.message.edit_text(
-            "⏭️ You can set your timezone anytime from the menu.\n\n👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?",
-            reply_markup=main_menu_keyboard()
-        )
-        await state.clear()
-    elif timezone_data == 'tz_custom':
-        # User wants to enter custom timezone
-        await callback_query.message.edit_text(
-            "✍️ **Enter your custom timezone** (e.g., Europe/Berlin, America/New_York, UTC+5:30):",
-            parse_mode="Markdown",
-            reply_markup=back_keyboard()
-        )
-        await state.set_state(SetupLink.waiting_for_timezone)
-    else:
-        # User selected a predefined timezone
-        timezone_value = timezone_data.replace('tz_', '')
-        try:
+    try:
+        # Detect timezone from coordinates
+        tf = TimezoneFinder()
+        detected_tz = tf.timezone_at(lat=latitude, lng=longitude)
+        
+        if detected_tz:
+            # Update user's timezone in database
             users_table.update_item(
                 Key={'chat_id': chat_id},
                 UpdateExpression="SET timezone = :tz",
-                ExpressionAttributeValues={':tz': timezone_value}
+                ExpressionAttributeValues={':tz': detected_tz}
             )
-            print(f"INFO - User {chat_id} set timezone to {timezone_value}", flush=True)
-            await callback_query.message.edit_text(
-                f"✅ **Timezone set to {timezone_value}!**\n\n👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?",
-                parse_mode="Markdown",
-                reply_markup=main_menu_keyboard()
+            print(f"INFO - User {chat_id} shared location (lat:{latitude}, lng:{longitude}). Timezone auto-detected: {detected_tz}", flush=True)
+            await message.answer(
+                f"📍 **Timezone auto-detected!**\n\n✅ Your timezone is now set to **{detected_tz}**\n\nJob alerts will arrive at the right time for your location."
             )
-            await state.clear()
-        except Exception as e:
-            await callback_query.message.edit_text(
-                f"❌ Error setting timezone: {e}",
-                reply_markup=back_keyboard()
+        else:
+            print(f"WARN - Could not detect timezone for location (lat:{latitude}, lng:{longitude})", flush=True)
+            await message.answer(
+                "❌ Could not detect timezone from this location. Your default timezone (CET) remains active."
             )
-    
-    await callback_query.answer()
-
-@dp.message(SetupLink.waiting_for_timezone)
-async def capture_custom_timezone(message: types.Message, state: FSMContext):
-    chat_id = str(message.chat.id)
-    custom_timezone = message.text.strip()
-    
-    try: await message.delete()
-    except Exception: pass
-    
-    try:
-        users_table.update_item(
-            Key={'chat_id': chat_id},
-            UpdateExpression="SET timezone = :tz",
-            ExpressionAttributeValues={':tz': custom_timezone}
-        )
-        print(f"INFO - User {chat_id} set custom timezone to {custom_timezone}", flush=True)
-        
-        await message.answer(
-            f"✅ **Timezone set to {custom_timezone}!**\n\n👋 Welcome to JobBot SaaS!\n\nWhat would you like to do?",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard()
-        )
-        await state.clear()
     except Exception as e:
-        print(f"ERROR - Failed to set timezone for user {chat_id}: {e}", flush=True)
+        print(f"ERROR - Failed to process location for user {chat_id}: {e}", flush=True)
         await message.answer(
-            f"❌ Error saving timezone: {e}",
-            reply_markup=back_keyboard()
+            f"❌ Error processing location: {e}"
         )
 
 # --- 2. THE CHOICE MENU ---
