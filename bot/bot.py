@@ -141,7 +141,8 @@ async def handle_location_share(message: types.Message):
             # Update user's timezone in database
             users_table.update_item(
                 Key={'chat_id': chat_id},
-                UpdateExpression="SET timezone = :tz",
+                UpdateExpression="SET #tz = :tz",
+                ExpressionAttributeNames={'#tz': 'timezone'},
                 ExpressionAttributeValues={':tz': detected_tz}
             )
             print(f"INFO - User {chat_id} shared location (lat:{latitude}, lng:{longitude}). Timezone auto-detected: {detected_tz}", flush=True)
@@ -314,11 +315,18 @@ async def manage_links(callback_query: types.CallbackQuery):
         keyboard_buttons = []
         
         for i, item in enumerate(items, 1):
-            short_url = item['search_url'][:25] + "..."
             freq = item['frequency_minutes']
-            msg += f"{i}. Every {freq}m: [View Link]({item['search_url']})\n"
+            search_url = item['search_url']
+            
+            # Extract job title and location from URL parameters
+            parsed_url = urllib.parse.urlparse(search_url)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            job_title = query_params.get('keywords', ['Unknown'])[0]
+            location = query_params.get('location', ['Anywhere'])[0]
+            
+            msg += f"{i}. 💼 **{job_title}** • 📍 {location}\n   ⏱️ Every {freq}m • [View Link]({search_url})\n\n"
             keyboard_buttons.append([
-                InlineKeyboardButton(text=f"🗑️ Delete #{i} ({freq}m)", callback_data=f"del_{item['subscription_id']}")
+                InlineKeyboardButton(text=f"🗑️ Delete #{i}", callback_data=f"del_{item['subscription_id']}")
             ])
             
         keyboard_buttons.append([InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="back_to_main")])
