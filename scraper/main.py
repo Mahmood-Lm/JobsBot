@@ -76,9 +76,32 @@ def lambda_handler(event, lambda_context):
                 
                 # Truncate the list for processing
                 new_jobs = new_jobs[:MAX_JOBS]
+
+            # --- PHASE 1: SCRAPING ---
+            jobs_with_descriptions = []
+            for job, user_job_id in new_jobs:
+                # Check time safety valve before scraping
+                time_left_ms = lambda_context.get_remaining_time_in_millis()
+                if time_left_ms < 30000:
+                    print(f"CRITICAL: Only {time_left_ms}ms left! Stopping scraping to preserve time for message send.")
+                    break
+
+                scrape_start_time = time.time()
+                job_desc = get_job_description(playwright_context, job['link'])
+                scrape_end_time = time.time()
+                
+                print(f"DEBUG - Scraping {user_job_id} at {job['company']} took {scrape_end_time - scrape_start_time:.2f} seconds.")
+                
+                jobs_with_descriptions.append({
+                    'job': job,
+                    'user_job_id': user_job_id,
+                    'description': job_desc
+                })
             
-            # flag to track AI health
-            ai_credits_exhausted = False
+            # If no jobs were scraped, skip to next record
+            if not jobs_with_descriptions:
+                print("No jobs were scraped before timeout. Skipping AI evaluation.")
+                continue
 
             # Extract search criteria from the URL to personalize the alert header
             parsed_url = urllib.parse.urlparse(search_url)
@@ -86,78 +109,101 @@ def lambda_handler(event, lambda_context):
             search_keywords = query_params.get('keywords', [''])[0]
             search_location = query_params.get('location', [''])[0]
 
-            header_text = f"{len(new_jobs)} new jobs found" + (f" for {search_keywords}" if search_keywords else "") + (f" in {search_location}" if search_location else "")
+            header_text = f"{len(jobs_with_descriptions)} new jobs found" + (f" for {search_keywords}" if search_keywords else "") + (f" in {search_location}" if search_location else "")
             final_message = f"🚨 <b>{header_text}</b> 🚨\n\n"
+
+            # --- PHASE 2: CONSOLIDATED AI REQUEST ---
+            ai_results = {}  # Maps job index to {rating, summary}
             
-            for job, user_job_id in new_jobs:
-                # --- SAFETY VALVE 2: THE TIME-AWARE LOOP ---
-                time_left_ms = lambda_context.get_remaining_time_in_millis()
-                if time_left_ms < 30000:
-                    print(f"CRITICAL: Only {time_left_ms}ms left! Bailing out to send message before timeout.")
-                    final_message += "⚠️ <i>Execution time running out. Remaining jobs skipped in this alert.</i>\n"
-                    break # Break the loop, send what we have!
-
-                job_segment = f"💼 <b>{job['title']}</b>\n🏢 {job['company']}\n"
+            if cv_profile:
+                # Build a consolidated prompt with all jobs
+                jobs_for_ai = []
+                for idx, item in enumerate(jobs_with_descriptions):
+                    jobs_for_ai.append({
+                        "index": idx,
+                        "title": item['job']['title'],
+                        "company": item['job']['company'],
+                        "description": item['description']
+                    })
                 
-                if cv_profile and not ai_credits_exhausted:
-                    
-                    scrape_start_time = time.time()
-                    # Pass the open browser context to get_job_description!
-                    job_desc = get_job_description(playwright_context, job['link'])
-                    scrape_end_time = time.time()
-
-                    print(f"DEBUG - Scraping {user_job_id} at {job['company']} took {scrape_end_time - scrape_start_time:.2f} seconds.")
-                    
-                    time.sleep(5) # AI rate limit safety net
-                    
-                    prompt = f"""
-                    Evaluate this job match for the candidate. Return ONLY a JSON object with:
-                    - "rating": an integer from 1 to 10.
-                    - "summary": a brief explanation explaining WHY it is a good or bad match (max 40 words) using a second-person tone ("You...").
-                    
-                    CANDIDATE PROFILE:
-                    {cv_profile}
-                    
-                    JOB DESCRIPTION:
-                    {job_desc}
-                    """
-                    
+                consolidated_prompt = f"""
+                Evaluate each of these job listings for the candidate. Return ONLY a JSON array where each object has:
+                - "index": the job's index in the list (0-based)
+                - "rating": an integer from 1 to 10
+                - "summary": a brief explanation explaining WHY it is a good or bad match (max 40 words) using a second-person tone ("You...")
+                
+                CANDIDATE PROFILE:
+                {cv_profile}
+                
+                JOBS TO EVALUATE:
+                {json.dumps(jobs_for_ai, indent=2)}
+                """
+                
+                # Retry logic: attempt up to 2 times on quota/billing errors
+                retry_count = 0
+                max_retries = 1
+                
+                while retry_count <= max_retries:
                     try:
                         ai_start_time = time.time()
                         response = ai_client.models.generate_content(
                             model='gemini-3.1-flash-lite-preview',
-                            contents=prompt,
+                            contents=consolidated_prompt,
                             config={'response_mime_type': 'application/json'}
                         )
                         ai_end_time = time.time()
-                        print(f"DEBUG - AI generation took {ai_end_time - ai_start_time:.2f} seconds.")
-
-                        ai_data = json.loads(response.text)
-                        rating = ai_data.get('rating', 'N/A')
-                        summary = ai_data.get('summary', 'Analysis unavailable.')
-
-                        job_segment += f"⭐ <b>Rating: {rating}/10</b>\n<blockquote>{summary}</blockquote>\n"
+                        print(f"DEBUG - AI generation for {len(jobs_with_descriptions)} jobs took {ai_end_time - ai_start_time:.2f} seconds.")
+                        
+                        # Parse the response into a dict indexed by job position
+                        ai_response_array = json.loads(response.text)
+                        for result in ai_response_array:
+                            idx = result.get('index')
+                            ai_results[idx] = {
+                                'rating': result.get('rating', 'N/A'),
+                                'summary': result.get('summary', 'Analysis unavailable.')
+                            }
+                        
+                        break  # Success, exit retry loop
+                        
                     except Exception as e:
                         error_msg = str(e).lower()
-                        print(f"ERROR - AI Generation Failed: {error_msg}")
-                        job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
+                        print(f"ERROR - AI Generation Failed (attempt {retry_count + 1}): {error_msg}")
                         
-                        # If it's a billing/quota error, flip the switch to save the rest of the batch!
-                        if "quota" in error_msg or "billing" in error_msg or "429" in error_msg:
-                            print("CRITICAL: AI Credits empty! Bypassing AI for remaining jobs.")
-                            ai_credits_exhausted = True
+                        # Check if it's a quota/billing error
+                        is_quota_error = "quota" in error_msg or "billing" in error_msg or "429" in error_msg
+                        
+                        if is_quota_error and retry_count < max_retries:
+                            print(f"Quota/billing error detected. Retrying... ({retry_count + 1}/{max_retries})")
+                            retry_count += 1
+                            time.sleep(2)  # Brief delay before retry
+                        else:
+                            # Final failure - no more retries or not a quota error
+                            print("CRITICAL: AI evaluation failed and retries exhausted. Skipping AI for all jobs.")
+                            break
 
-                elif ai_credits_exhausted:
-                    # If credits are dead, skip the deep scrape and AI entirely to save time
-                    job_segment += "🤖 <i>AI Match Analysis skipped (API Credits Exhausted).</i>\n"
-
+            # --- PHASE 3: MESSAGE FORMATTING ---
+            for idx, item in enumerate(jobs_with_descriptions):
+                job = item['job']
+                user_job_id = item['user_job_id']
+                
+                job_segment = f"💼 <b>{job['title']}</b>\n🏢 {job['company']}\n"
+                
+                # Add AI results if available for this job
+                if idx in ai_results:
+                    rating = ai_results[idx]['rating']
+                    summary = ai_results[idx]['summary']
+                    job_segment += f"⭐ <b>Rating: {rating}/10</b>\n<blockquote>{summary}</blockquote>\n"
+                elif cv_profile:
+                    # AI was attempted but no result for this job
+                    job_segment += "🤖 <i>AI Match Analysis currently unavailable.</i>\n"
+                
                 job_segment += f"🔗 <a href='{job['link']}'>Apply Here</a>\n\n"
                 final_message += job_segment
 
             if send_message(chat_id, final_message.strip()):
-                print(f"Sent batched alert for {len(new_jobs)} jobs to {chat_id}. Saving to DB...")
-                for _, user_job_id in new_jobs:
-                    jobs_table.put_item(Item={'user_job_id': user_job_id})
+                print(f"Sent batched alert for {len(jobs_with_descriptions)} jobs to {chat_id}. Saving to DB...")
+                for item in jobs_with_descriptions:
+                    jobs_table.put_item(Item={'user_job_id': item['user_job_id']})
                     
         # 3. Cleanly shut down the master browser
         browser.close()
