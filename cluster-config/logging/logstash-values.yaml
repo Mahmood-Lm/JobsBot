@@ -48,10 +48,6 @@ logstashPipeline:
         }
       }
       
-      # Remove the raw message field to avoid duplication
-      mutate {
-        remove_field => [ "message" ]
-      }
     }
 
     output {
