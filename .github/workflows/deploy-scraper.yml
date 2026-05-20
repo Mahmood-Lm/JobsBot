@@ -2,7 +2,7 @@ name: Deploy Scraper to Lambda
 on:
   push:
     branches: [ "main" ]
-    paths: [ "scraper/**" ]
+    paths: [ "scraper/**", "shared/**" , ".github/workflows/deploy-scraper.yml"]
 
 jobs:
   build-and-deploy:

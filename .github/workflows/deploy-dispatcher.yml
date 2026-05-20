@@ -3,8 +3,7 @@ name: Deploy Dispatcher to Lambda
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - 'dispatcher/**'
+    paths: [ "dispatcher/**", "shared/**" , ".github/workflows/deploy-dispatcher.yml"]
 
 jobs:
   deploy:
