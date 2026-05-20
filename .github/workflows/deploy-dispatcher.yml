@@ -24,9 +24,14 @@ jobs:
           mkdir -p lambda_package
           cp dispatcher/main.py lambda_package/
           cp -r shared lambda_package/
+          
+          # Install dependencies into the package
+          pip install -r dispatcher/requirements.txt -t lambda_package/
+          
           cd lambda_package
           zip -r ../deployment.zip .
           cd ..
+          
           aws lambda update-function-code \
             --region eu-central-1 \
             --function-name linkedin-dispatcher-function \
