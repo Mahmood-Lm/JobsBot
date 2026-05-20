@@ -23,7 +23,7 @@ jobs:
       - name: Zip and Update Lambda
         run: |
           cd dispatcher
-          zip -r deployment.zip main.py
+          zip -r deployment.zip dispatcher/main.py shared/
           aws lambda update-function-code \
             --region eu-central-1 \
             --function-name linkedin-dispatcher-function \
