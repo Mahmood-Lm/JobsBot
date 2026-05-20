@@ -35,13 +35,25 @@ logstashPipeline:
       }
     }
     filter {
+      # Parse JSON and merge all fields to root level (no manual field listing needed)
+      json {
+        source => "message"
+      }
+      
+      # Parse timestamp for @timestamp field
       if [timestamp] {
         date {
-          match => [ "timestamp", "UNIX_MS" ]
+          match => [ "timestamp", "ISO8601" ]
           target => "@timestamp"
         }
       }
+      
+      # Remove the raw message field to avoid duplication
+      mutate {
+        remove_field => [ "message" ]
+      }
     }
+
     output {
       elasticsearch {
         hosts => ["https://elasticsearch-master:9200"]
