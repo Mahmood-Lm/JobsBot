@@ -124,37 +124,35 @@ class ContextualLogger:
         self.logger = logger
         self.component = component
     
-    def _prepare_message(self, message, extra=None):
-        """Prepare message dict with component and extra fields."""
-        msg_dict = {'message': message, 'component': self.component}
-        if extra:
-            msg_dict.update(extra)
-        return msg_dict
-    
     def debug(self, message, extra=None):
         """Log debug message."""
-        msg_dict = self._prepare_message(message, extra)
-        self.logger.debug(json.dumps(msg_dict), extra={'message': message, 'component': self.component} | (extra or {}))
+        extra_dict = extra or {}
+        extra_dict['component'] = self.component
+        self.logger.debug(message, extra=extra_dict)
     
     def info(self, message, extra=None):
         """Log info message."""
-        msg_dict = self._prepare_message(message, extra)
-        self.logger.info(json.dumps(msg_dict), extra={'message': message, 'component': self.component} | (extra or {}))
+        extra_dict = extra or {}
+        extra_dict['component'] = self.component
+        self.logger.info(message, extra=extra_dict)
     
     def warning(self, message, extra=None):
         """Log warning message."""
-        msg_dict = self._prepare_message(message, extra)
-        self.logger.warning(json.dumps(msg_dict), extra={'message': message, 'component': self.component} | (extra or {}))
+        extra_dict = extra or {}
+        extra_dict['component'] = self.component
+        self.logger.warning(message, extra=extra_dict)
     
     def error(self, message, extra=None):
         """Log error message."""
-        msg_dict = self._prepare_message(message, extra)
-        self.logger.error(json.dumps(msg_dict), extra={'message': message, 'component': self.component} | (extra or {}))
+        extra_dict = extra or {}
+        extra_dict['component'] = self.component
+        self.logger.error(message, extra=extra_dict)
     
     def critical(self, message, extra=None):
         """Log critical message."""
-        msg_dict = self._prepare_message(message, extra)
-        self.logger.critical(json.dumps(msg_dict), extra={'message': message, 'component': self.component} | (extra or {}))
+        extra_dict = extra or {}
+        extra_dict['component'] = self.component
+        self.logger.critical(message, extra=extra_dict)
     
     def set_context(self, **kwargs):
         """Set thread-local context variables (e.g., correlation_id, job_id)."""
@@ -170,12 +168,7 @@ class ContextualLogger:
         return _get_context().copy()
     
     def contextualize(self, **kwargs):
-        """Context manager for setting context within a scope.
-        
-        Usage:
-            with logger.contextualize(job_id="123"):
-                logger.info("Processing job")  # Automatically includes job_id
-        """
+        """Context manager for setting context within a scope."""
         return _ContextManager(self, **kwargs)
 
 
