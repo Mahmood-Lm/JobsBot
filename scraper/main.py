@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import boto3
@@ -8,6 +9,10 @@ from google import genai
 from playwright.sync_api import sync_playwright # <--- We moved Playwright here
 from scraper import get_jobs, get_job_description
 from telegram_bot import send_message
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from shared.logging import get_logger
+
+logger = get_logger('scraper')
 
 # Initialize AWS and AI
 dynamodb = boto3.resource('dynamodb', region_name='eu-central-1') 
@@ -22,7 +27,7 @@ def is_job_seen(user_job_id):
         response = jobs_table.get_item(Key={'user_job_id': user_job_id})
         return 'Item' in response
     except Exception as e:
-        print(f"ERROR - Error checking job in DB: {e}")
+        logger.error("Error checking job in DB", extra={"error": str(e), "user_job_id": user_job_id})
         return False
 
 def get_user_cv(chat_id):
@@ -30,7 +35,7 @@ def get_user_cv(chat_id):
         response = users_table.get_item(Key={'chat_id': str(chat_id)})
         return response.get('Item', {}).get('distilled_cv_profile')
     except Exception as e:
-        print(f"ERROR - Error fetching CV: {e}")
+        logger.error("Error fetching CV", extra={"error": str(e), "chat_id": str(chat_id)})
         return None
 
 def lambda_handler(event, lambda_context):
@@ -63,19 +68,28 @@ def lambda_handler(event, lambda_context):
                     new_jobs.append((job, user_job_id))
             
             if not new_jobs:
-                print("No new jobs found. Sleeping.")
+                logger.info("No new jobs found", extra={"chat_id": chat_id})
                 continue 
 
             # --- SAFETY VALVE: THE BACKLOG SLICER ---
             MAX_JOBS = 10 # Max jobs to process in one batch to avoid Lambda timeouts and AI overuse
             if len(new_jobs) > MAX_JOBS:
-                print(f"Backlog detected! Processing top {MAX_JOBS}, silently ignoring the remaining {len(new_jobs) - MAX_JOBS}.")
+                logger.warning(f"Backlog detected! Processing top {MAX_JOBS}, silently ignoring the remaining {len(new_jobs) - MAX_JOBS}.", extra={"chat_id": chat_id, "total_jobs": len(new_jobs), "processing_count": MAX_JOBS})
                 # Save the ignored jobs to DynamoDB so they don't haunt us next time
                 for _, user_job_id in new_jobs[MAX_JOBS:]: #TODO: could save the jobs to table without sending alerts if an error occurs
                     jobs_table.put_item(Item={'user_job_id': user_job_id})
                 
                 # Truncate the list for processing
                 new_jobs = new_jobs[:MAX_JOBS]
+            
+            # Log all new jobs as structured event
+            jobs_for_logging = [job for job, _ in new_jobs]
+            logger.info("New jobs found", extra={
+                "event": "new_jobs_found",
+                "count": len(jobs_for_logging),
+                "jobs": jobs_for_logging,
+                "chat_id": chat_id
+            })
 
             # --- PHASE 1: SCRAPING ---
             jobs_with_descriptions = []
@@ -83,14 +97,14 @@ def lambda_handler(event, lambda_context):
                 # Check time safety valve before scraping
                 time_left_ms = lambda_context.get_remaining_time_in_millis()
                 if time_left_ms < 30000:
-                    print(f"CRITICAL: Only {time_left_ms}ms left! Stopping scraping to preserve time for message send.")
+                    logger.critical(f"Insufficient Lambda time remaining. Stopping scraping to preserve time for message send.", extra={"time_remaining_ms": time_left_ms, "chat_id": chat_id, "user_job_id": user_job_id})
                     break
 
                 scrape_start_time = time.time()
                 job_desc = get_job_description(playwright_context, job['link'])
                 scrape_end_time = time.time()
                 
-                print(f"DEBUG - Scraping {user_job_id} at {job['company']} took {scrape_end_time - scrape_start_time:.2f} seconds.")
+                logger.info(f"Job scraped successfully", extra={"user_job_id": user_job_id, "company": job['company'], "duration_seconds": round(scrape_end_time - scrape_start_time, 2), "chat_id": chat_id})
                 
                 jobs_with_descriptions.append({
                     'job': job,
@@ -100,7 +114,7 @@ def lambda_handler(event, lambda_context):
             
             # If no jobs were scraped, skip to next record
             if not jobs_with_descriptions:
-                print("No jobs were scraped before timeout. Skipping AI evaluation.")
+                logger.warning("No jobs were scraped before timeout. Skipping AI evaluation.", extra={"chat_id": chat_id})
                 continue
 
             # Extract search criteria from the URL to personalize the alert header
@@ -120,15 +134,15 @@ def lambda_handler(event, lambda_context):
                 jobs_for_ai = []
                 for idx, item in enumerate(jobs_with_descriptions):
                     jobs_for_ai.append({
-                        "index": idx,
                         "title": item['job']['title'],
                         "company": item['job']['company'],
                         "description": item['description']
                     })
                 
                 consolidated_prompt = f"""
-                Evaluate each of these job listings for the candidate. Return ONLY a JSON array where each object has:
-                - "index": the job's index in the list (0-based)
+                Evaluate each of these job listings for the candidate independently. For each job, assess it based solely on how well it matches the candidate's profile, without comparing it to other jobs in the list.
+                
+                Return ONLY a JSON array where each object (in the same order as the input) has:
                 - "rating": an integer from 1 to 10
                 - "summary": a brief explanation explaining WHY it is a good or bad match (max 40 words) using a second-person tone ("You...")
                 
@@ -152,12 +166,11 @@ def lambda_handler(event, lambda_context):
                             config={'response_mime_type': 'application/json'}
                         )
                         ai_end_time = time.time()
-                        print(f"DEBUG - AI generation for {len(jobs_with_descriptions)} jobs took {ai_end_time - ai_start_time:.2f} seconds.")
+                        logger.info(f"AI generation completed", extra={"job_count": len(jobs_with_descriptions), "duration_seconds": round(ai_end_time - ai_start_time, 2), "chat_id": chat_id})
                         
                         # Parse the response into a dict indexed by job position
                         ai_response_array = json.loads(response.text)
-                        for result in ai_response_array:
-                            idx = result.get('index')
+                        for idx, result in enumerate(ai_response_array):
                             ai_results[idx] = {
                                 'rating': result.get('rating', 'N/A'),
                                 'summary': result.get('summary', 'Analysis unavailable.')
@@ -167,18 +180,18 @@ def lambda_handler(event, lambda_context):
                         
                     except Exception as e:
                         error_msg = str(e).lower()
-                        print(f"ERROR - AI Generation Failed (attempt {retry_count + 1}): {error_msg}")
+                        logger.error(f"AI generation failed", extra={"attempt": retry_count + 1, "error": error_msg, "chat_id": chat_id, "job_count": len(jobs_with_descriptions)})
                         
                         # Check if it's a quota/billing error
                         is_quota_error = "quota" in error_msg or "billing" in error_msg or "429" in error_msg
                         
                         if is_quota_error and retry_count < max_retries:
-                            print(f"Quota/billing error detected. Retrying... ({retry_count + 1}/{max_retries})")
+                            logger.info(f"Quota/billing error detected. Retrying...", extra={"attempt": retry_count + 1, "max_retries": max_retries, "chat_id": chat_id})
                             retry_count += 1
                             time.sleep(2)  # Brief delay before retry
                         else:
                             # Final failure - no more retries or not a quota error
-                            print("CRITICAL: AI evaluation failed and retries exhausted. Skipping AI for all jobs.")
+                            logger.critical("AI evaluation failed and retries exhausted. Skipping AI for all jobs.", extra={"chat_id": chat_id, "job_count": len(jobs_with_descriptions)})
                             break
 
             # --- PHASE 3: MESSAGE FORMATTING ---
@@ -201,7 +214,7 @@ def lambda_handler(event, lambda_context):
                 final_message += job_segment
 
             if send_message(chat_id, final_message.strip()):
-                print(f"Sent batched alert for {len(jobs_with_descriptions)} jobs to {chat_id}. Saving to DB...")
+                logger.info(f"Sent batched alert and saved jobs to DB", extra={"job_count": len(jobs_with_descriptions), "chat_id": chat_id})
                 for item in jobs_with_descriptions:
                     jobs_table.put_item(Item={'user_job_id': item['user_job_id']})
                     

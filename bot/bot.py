@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import time
 import uuid
 import boto3
@@ -19,6 +20,11 @@ from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 # --- NEW WEBHOOK IMPORTS ---
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
+
+sys.path.insert(0, os.path.dirname(__file__))
+from shared.logging import get_logger
+
+logger = get_logger('bot')
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUBSCRIPTIONS_TABLE = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
@@ -59,10 +65,10 @@ async def ensure_user_exists(chat_id: int):
             'created_at': int(datetime.now().timestamp())
         }
         users_table.put_item(Item=new_user)
-        print(f"INFO - New user {chat_id} created in Users table with level=0 and timezone=CET", flush=True)
+        logger.info("New user created", extra={"chat_id": chat_id, "level": 0, "timezone": "CET"})
         return new_user
     except Exception as e:
-        print(f"ERROR - Failed to ensure user {chat_id} exists: {e}", flush=True)
+        logger.error("Failed to ensure user exists", extra={"chat_id": chat_id, "error": str(e)})
         return None
 
 class SetupLink(StatesGroup):
@@ -103,7 +109,7 @@ def back_keyboard():
 async def send_welcome(message: types.Message, state: FSMContext):
     START_COMMAND_COUNTER.inc()  # Increment the /start command counter
     chat_id = message.chat.id
-    print(f"INFO - User {chat_id} started the bot. Welcome menu sent.", flush=True)
+    logger.info("User started the bot", extra={"chat_id": chat_id})
     await state.clear()
     
     # Ensure user exists in database (defaults to CET timezone)
@@ -145,17 +151,17 @@ async def handle_location_share(message: types.Message):
                 ExpressionAttributeNames={'#tz': 'timezone'},
                 ExpressionAttributeValues={':tz': detected_tz}
             )
-            print(f"INFO - User {chat_id} shared location (lat:{latitude}, lng:{longitude}). Timezone auto-detected: {detected_tz}", flush=True)
+            logger.info("User shared location and timezone was updated", extra={"chat_id": chat_id, "latitude": latitude, "longitude": longitude, "timezone": detected_tz})
             await message.answer(
                 f"📍 **Timezone auto-detected!**\n\n✅ Your timezone is now set to **{detected_tz}**\n\nJob alerts will arrive at the right time for your location."
             )
         else:
-            print(f"WARN - Could not detect timezone for location (lat:{latitude}, lng:{longitude})", flush=True)
+            logger.warning("Could not detect timezone for location", extra={"chat_id": chat_id, "latitude": latitude, "longitude": longitude})
             await message.answer(
                 "❌ Could not detect timezone from this location. Your default timezone (CET) remains active."
             )
     except Exception as e:
-        print(f"ERROR - Failed to process location for user {chat_id}: {e}", flush=True)
+        logger.error("Failed to process location", extra={"chat_id": chat_id, "error": str(e)})
         await message.answer(
             f"❌ Error processing location: {e}"
         )
@@ -280,7 +286,7 @@ async def capture_freq(callback_query: types.CallbackQuery, state: FSMContext):
             'last_scraped_timestamp': 0 
         })
         
-        print(f"SUCCESS - User {callback_query.message.chat.id} created a new subscription (Freq: {minutes}m): {data['search_url']}", flush=True)
+        logger.info("New subscription created", extra={"chat_id": str(callback_query.message.chat.id), "frequency_minutes": minutes, "search_url": data['search_url'][:50]})
         await callback_query.message.edit_text(
             "✅ **Link Successfully Added!**\n\nJobs will begin arriving shortly.", 
             parse_mode="Markdown",
@@ -363,7 +369,7 @@ async def handle_cv_upload(message: types.Message):
         file_info = await bot.get_file(message.document.file_id)
         downloaded_file = await bot.download_file(file_info.file_path)
         
-        print(f"INFO - Received CV upload from {message.chat.id}, parsing PDF...", flush=True)
+        logger.info("CV upload received", extra={"chat_id": message.chat.id, "filename": message.document.file_name})
         
         pdf_reader = PyPDF2.PdfReader(downloaded_file)
         raw_text = ""
@@ -371,7 +377,7 @@ async def handle_cv_upload(message: types.Message):
             raw_text += page.extract_text() or ""
             
         if not raw_text.strip():
-            print(f"WARN - User {message.chat.id} uploaded an empty or unparseable PDF.", flush=True)
+            logger.warning("Empty or unparseable PDF uploaded", extra={"chat_id": message.chat.id})
             await processing_msg.edit_text("❌ I couldn't extract any text from this PDF. It might be an image-based scan.")
             return
             
@@ -399,7 +405,7 @@ async def handle_cv_upload(message: types.Message):
             contents=prompt
         )
         cv_end_time = time.time()
-        print(f"DEBUG - CV distillation took {cv_end_time - cv_start_time:.2f} seconds. (User: {message.chat.id})", flush=True)
+        logger.info("CV distillation completed", extra={"chat_id": message.chat.id, "duration_seconds": round(cv_end_time - cv_start_time, 2)})
 
         distilled_profile = response.text
         
@@ -427,13 +433,13 @@ async def handle_cv_upload(message: types.Message):
 
 # --- STARTUP HOOK ---
 async def on_startup(bot: Bot):
-    print(f"Registering Webhook URL: {WEBHOOK_URL}")
+    logger.info(f"Registering Webhook URL", extra={"webhook_url": WEBHOOK_URL[:50]})
     await bot.set_webhook(url=WEBHOOK_URL)
 
 
 # --- MAIN WEB SERVER LOOP ---
 def main():
-    print("Bot Brain is waking up and starting Webhook Server...")
+    logger.info("Bot Brain starting Webhook Server")
     
     # Register the startup hook
     dp.startup.register(on_startup)

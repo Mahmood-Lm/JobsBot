@@ -3,3 +3,4 @@ requests
 boto3
 awslambdaric
 google-genai
+python-json-logger

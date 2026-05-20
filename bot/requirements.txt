@@ -4,3 +4,4 @@ PyPDF2==3.0.1
 google-genai
 prometheus-client==0.20.0
 timezonefinder==6.2.0
+python-json-logger

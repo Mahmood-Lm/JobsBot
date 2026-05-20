@@ -1,5 +1,11 @@
 import json
+import os
+import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from shared.logging import get_logger
+
+logger = get_logger('scraper')
 
 def get_jobs(context, search_url):
     """Opens a tab to scrape the initial job search results."""
@@ -13,7 +19,7 @@ def get_jobs(context, search_url):
         try:
             page.wait_for_selector('.base-card, .job-search-card', timeout=10000)
         except Exception as e:
-            print(f"ERROR - Timeout: The universal job cards never appeared: {e}")
+            logger.error("Timeout waiting for job cards", extra={"error": str(e), "search_url": search_url})
         
         job_cards = page.locator('.base-card, .job-search-card').all()
         for i, card in enumerate(job_cards):
@@ -26,14 +32,9 @@ def get_jobs(context, search_url):
                 
                 job_obj = {"id": job_id, "title": title, "company": company, "link": clean_link}
                 jobs_found.append(job_obj)
-                print(json.dumps({
-                    "event": "job_found",
-                    "job_title": title,
-                    "company": company
-                }))
                 
             except Exception as e:
-                print(f"ERROR - Error occurred while processing job card: {e}")
+                logger.error("Error processing job card", extra={"error": str(e), "card_index": i})
                 continue
     finally:
         page.close() # CRITICAL: Close the tab to free up memory!
@@ -53,9 +54,9 @@ def get_job_description(context, job_url):
         selectors = '.description__text, .show-more-less-html__markup, .core-section-container__content, .jobs-description-content__text'
         page.wait_for_selector(selectors, timeout=8000)
         description = page.locator(selectors).first.inner_text()
-        # print("DEBUG - Successfully deep-scraped job description.")
+        logger.info("Successfully scraped job description", extra={"job_url": job_url[:50]})
     except Exception as e:
-        print(f"ERROR - Could not load full description: {e}")
+        logger.error("Could not load full description", extra={"error": str(e), "job_url": job_url[:50]})
         description = "Description not available."
     finally:
         page.close() # CRITICAL: Close the tab!

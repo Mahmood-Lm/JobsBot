@@ -5,11 +5,12 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Copy the requirements and install them
-COPY requirements.txt .
+COPY bot/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your bot code
-COPY bot.py .
+COPY bot/bot.py .
+COPY shared/ ./shared
 
 # Run the bot
 CMD ["python", "bot.py"]

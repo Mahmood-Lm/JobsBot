@@ -1,11 +1,17 @@
 import os
+import sys
 import json
 import boto3
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from shared.logging import get_logger
+
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 sqs = boto3.client('sqs')
+
+logger = get_logger('dispatcher')
 
 TABLE_NAME = os.getenv("SUBSCRIPTIONS_TABLE", "Subscriptions-V2")
 QUEUE_URL = os.getenv("SQS_QUEUE_URL")
@@ -13,7 +19,7 @@ QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 table = dynamodb.Table(TABLE_NAME)
 
 def lambda_handler(event, context):
-    print("Dispatcher waking up...")
+    logger.info("Dispatcher starting")
     now = int(datetime.now(timezone.utc).timestamp())
     
     # 1. Grab all active subscriptions from DynamoDB
@@ -21,7 +27,7 @@ def lambda_handler(event, context):
         response = table.scan()
         subscriptions = response.get('Items', [])
     except Exception as e:
-        print(f"Error reading DynamoDB: {e}")
+        logger.error("Error reading DynamoDB", extra={"error": str(e)})
         return {"statusCode": 500, "body": "DB Error"}
     
     tasks_sent = 0
@@ -36,7 +42,7 @@ def lambda_handler(event, context):
         
         # If current time is greater than or equal to their next scheduled scrape time...
         if now >= (last_scraped + (freq_mins * 60)):
-            print(f"Triggering scrape for Subscription: {sub_id} (User: {chat_id})")
+            logger.info("Triggering scrape", extra={"subscription_id": sub_id, "chat_id": chat_id, "frequency_minutes": freq_mins})
             
             # A. Send the task to the SQS Queue
             message_body = {
@@ -57,5 +63,5 @@ def lambda_handler(event, context):
                 ExpressionAttributeValues={':now': now}
             )
             
-    print(f"Dispatcher finished. Sent {tasks_sent} tasks to SQS.")
+    logger.info("Dispatcher finished", extra={"tasks_sent": tasks_sent})
     return {"statusCode": 200, "body": f"Dispatched {tasks_sent} tasks"}
