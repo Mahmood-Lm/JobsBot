@@ -161,7 +161,7 @@ def lambda_handler(event, lambda_context):
                     try:
                         ai_start_time = time.time()
                         response = ai_client.models.generate_content(
-                            model='gemini-3.1-flash-lite-preview',
+                            model='gemini-3.1-flash-lite',
                             contents=consolidated_prompt,
                             config={'response_mime_type': 'application/json'}
                         )
