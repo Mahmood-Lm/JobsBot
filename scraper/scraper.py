@@ -2,6 +2,8 @@ import json
 import os
 import sys
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from shared.logging import get_logger
 
@@ -11,6 +13,7 @@ def get_jobs(context, search_url):
     """Opens a tab to scrape the initial job search results."""
     jobs_found = []
     page = context.new_page() # Open a new tab
+    page.set_default_timeout(5000)
     
     try:
         page.goto(search_url)
@@ -21,18 +24,29 @@ def get_jobs(context, search_url):
         except Exception as e:
             logger.error("Timeout waiting for job cards", extra={"error": str(e), "search_url": search_url})
         
-        job_cards = page.locator('.base-card, .job-search-card').all()
-        for i, card in enumerate(job_cards):
+        cards = page.locator('.base-card, .job-search-card')
+        card_count = cards.count()
+        for i in range(card_count):
             try:
-                title = card.locator('.base-search-card__title').inner_text().strip()
-                company = card.locator('.base-search-card__subtitle').inner_text().strip()
-                link = card.locator('a.base-card__full-link').get_attribute('href')
+                card = cards.nth(i)
+                card.scroll_into_view_if_needed(timeout=2000)
+
+                title = card.locator('.base-search-card__title').first.inner_text().strip()
+                company = card.locator('.base-search-card__subtitle').first.inner_text().strip()
+                link = card.locator('a.base-card__full-link').first.get_attribute('href')
+                if not link:
+                    logger.warning("Missing job link", extra={"card_index": i})
+                    continue
+
                 clean_link = link.split('?')[0] 
                 job_id = clean_link.split('-')[-1]
                 
                 job_obj = {"id": job_id, "title": title, "company": company, "link": clean_link}
                 jobs_found.append(job_obj)
                 
+            except PlaywrightTimeoutError as e:
+                logger.warning("Timeout processing job card", extra={"error": str(e), "card_index": i})
+                continue
             except Exception as e:
                 logger.error("Error processing job card", extra={"error": str(e), "card_index": i})
                 continue
