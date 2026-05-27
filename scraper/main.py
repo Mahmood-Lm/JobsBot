@@ -18,7 +18,7 @@ logger = get_logger('scraper')
 
 BROWSER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process", "--no-zygote"]
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-DESCRIPTION_TIMEOUT_MS = 5000
+DESCRIPTION_TIMEOUT_MS = 8000
 DESCRIPTION_CONCURRENCY = 2
 GEMINI_TIMEOUT_SECONDS = 30
 
@@ -50,12 +50,7 @@ async def _scrape_description_job(semaphore, context, idx, job, user_job_id, tim
     async with semaphore:
         start_time = time.time()
         try:
-            description, timed_out = await asyncio.wait_for(
-                get_job_description_async(context, job['link'], timeout_ms=timeout_ms),
-                timeout=(timeout_ms / 1000.0)
-            )
-        except asyncio.TimeoutError:
-            description, timed_out = "Description not available.", True
+            description, timed_out = await get_job_description_async(context, job['link'], timeout_ms=timeout_ms)
         except Exception as e:
             logger.error("Description scrape failed", extra={"error": str(e), "user_job_id": user_job_id})
             description, timed_out = "Description not available.", False
