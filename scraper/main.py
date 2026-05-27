@@ -2,15 +2,14 @@ import os
 import sys
 import time
 import json
-import threading
-from queue import Queue
+import asyncio
 
 import boto3
 import config
 import urllib.parse
 from google import genai
-from playwright.sync_api import sync_playwright # <--- We moved Playwright here
-from scraper import get_jobs, get_job_description
+from playwright.async_api import async_playwright
+from scraper import get_jobs_async, get_job_description_async
 from telegram_bot import send_message
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from shared.logging import get_logger
@@ -21,6 +20,7 @@ BROWSER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-u
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 DESCRIPTION_TIMEOUT_MS = 5000
 DESCRIPTION_CONCURRENCY = 2
+GEMINI_TIMEOUT_SECONDS = 30
 
 # Initialize AWS and AI
 dynamodb = boto3.resource('dynamodb', region_name='eu-central-1') 
@@ -46,46 +46,40 @@ def get_user_cv(chat_id):
         logger.error("Error fetching CV", extra={"error": str(e), "chat_id": str(chat_id)})
         return None
 
-def _description_worker(worker_id, job_queue, result_queue, timeout_ms, browser_args, user_agent):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=browser_args)
-        context = browser.new_context(user_agent=user_agent)
+async def _scrape_description_job(semaphore, context, idx, job, user_job_id, timeout_ms):
+    async with semaphore:
+        start_time = time.time()
+        try:
+            description, timed_out = await asyncio.wait_for(
+                get_job_description_async(context, job['link'], timeout_ms=timeout_ms),
+                timeout=(timeout_ms / 1000.0)
+            )
+        except asyncio.TimeoutError:
+            description, timed_out = "Description not available.", True
+        except Exception as e:
+            logger.error("Description scrape failed", extra={"error": str(e), "user_job_id": user_job_id})
+            description, timed_out = "Description not available.", False
 
-        while True:
-            item = job_queue.get()
-            if item is None:
-                job_queue.task_done()
-                break
+        duration_seconds = round(time.time() - start_time, 2)
+        if timed_out:
+            logger.warning("Description scrape timed out", extra={"user_job_id": user_job_id, "company": job.get("company"), "duration_seconds": duration_seconds})
+        else:
+            logger.info("Job description scraped", extra={"user_job_id": user_job_id, "company": job.get("company"), "duration_seconds": duration_seconds})
 
-            idx, job, user_job_id = item
-            start_time = time.time()
-            try:
-                description, timed_out = get_job_description(context, job['link'], timeout_ms=timeout_ms)
-            except Exception as e:
-                logger.error("Description scrape failed", extra={"error": str(e), "user_job_id": user_job_id})
-                description, timed_out = "Description not available.", False
-
-            duration_seconds = round(time.time() - start_time, 2)
-            if timed_out:
-                logger.warning("Description scrape timed out", extra={"user_job_id": user_job_id, "company": job.get("company"), "duration_seconds": duration_seconds})
-            else:
-                logger.info("Job description scraped", extra={"user_job_id": user_job_id, "company": job.get("company"), "duration_seconds": duration_seconds})
-
-            result_queue.put((idx, job, user_job_id, description, timed_out))
-            job_queue.task_done()
-
-        context.close()
-        browser.close()
+        return idx, job, user_job_id, description, timed_out
 
 def lambda_handler(event, lambda_context):
-    
+    return asyncio.run(_lambda_handler_async(event, lambda_context))
+
+
+async def _lambda_handler_async(event, lambda_context):
     # 1. Boot up the single Master Browser for this Lambda execution
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
             headless=True,
             args=BROWSER_ARGS
         )
-        playwright_context = browser.new_context(
+        playwright_context = await browser.new_context(
             user_agent=USER_AGENT
         )
         
@@ -98,7 +92,7 @@ def lambda_handler(event, lambda_context):
             cv_profile = get_user_cv(chat_id)
             
             # Pass the open browser context to get_jobs!
-            current_jobs = get_jobs(playwright_context, search_url) 
+            current_jobs = await get_jobs_async(playwright_context, search_url) 
             new_jobs = []
             
             for job in current_jobs:
@@ -147,31 +141,23 @@ def lambda_handler(event, lambda_context):
                     })
             else:
                 worker_count = min(DESCRIPTION_CONCURRENCY, len(new_jobs))
-                job_queue = Queue()
-                result_queue = Queue()
+                semaphore = asyncio.Semaphore(worker_count)
 
-                for idx, (job, user_job_id) in enumerate(new_jobs):
-                    job_queue.put((idx, job, user_job_id))
-
-                for _ in range(worker_count):
-                    job_queue.put(None)
-
-                threads = []
-                for worker_id in range(worker_count):
-                    thread = threading.Thread(
-                        target=_description_worker,
-                        args=(worker_id, job_queue, result_queue, DESCRIPTION_TIMEOUT_MS, BROWSER_ARGS, USER_AGENT)
+                tasks = [
+                    asyncio.create_task(
+                        _scrape_description_job(semaphore, playwright_context, idx, job, user_job_id, DESCRIPTION_TIMEOUT_MS)
                     )
-                    thread.start()
-                    threads.append(thread)
-
-                job_queue.join()
-                for thread in threads:
-                    thread.join()
+                    for idx, (job, user_job_id) in enumerate(new_jobs)
+                ]
 
                 results = [None] * len(new_jobs)
-                for _ in range(len(new_jobs)):
-                    idx, job, user_job_id, description, timed_out = result_queue.get()
+                for task in asyncio.as_completed(tasks):
+                    try:
+                        idx, job, user_job_id, description, timed_out = await task
+                    except Exception as e:
+                        logger.error("Description task failed", extra={"error": str(e), "chat_id": chat_id})
+                        continue
+
                     description_available = bool(description) and description != "Description not available." and not timed_out
                     results[idx] = {
                         'job': job,
@@ -258,10 +244,14 @@ def lambda_handler(event, lambda_context):
                     while retry_count <= max_retries:
                         try:
                             ai_start_time = time.time()
-                            response = ai_client.models.generate_content(
-                                model='gemini-3.1-flash-lite',
-                                contents=consolidated_prompt,
-                                config={'response_mime_type': 'application/json'}
+                            response = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    ai_client.models.generate_content,
+                                    model='gemini-3.1-flash-lite',
+                                    contents=consolidated_prompt,
+                                    config={'response_mime_type': 'application/json'}
+                                ),
+                                timeout=GEMINI_TIMEOUT_SECONDS
                             )
                             ai_end_time = time.time()
                             logger.info(f"AI generation completed", extra={"job_count": len(jobs_for_ai), "duration_seconds": round(ai_end_time - ai_start_time, 2), "chat_id": chat_id})
@@ -288,6 +278,9 @@ def lambda_handler(event, lambda_context):
                             
                             break  # Success, exit retry loop
                             
+                        except asyncio.TimeoutError:
+                            logger.error("AI generation timed out", extra={"timeout_seconds": GEMINI_TIMEOUT_SECONDS, "chat_id": chat_id, "job_count": len(jobs_for_ai)})
+                            break
                         except Exception as e:
                             error_msg = str(e).lower()
                             logger.error(f"AI generation failed", extra={"attempt": retry_count + 1, "error": error_msg, "chat_id": chat_id, "job_count": len(jobs_for_ai)})
@@ -341,6 +334,6 @@ def lambda_handler(event, lambda_context):
                     jobs_table.put_item(Item={'user_job_id': item['user_job_id']})
                     
         # 3. Cleanly shut down the master browser
-        browser.close()
+        await browser.close()
                 
     return {'statusCode': 200, 'body': "Scrape completed successfully"}
