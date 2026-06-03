@@ -2,7 +2,7 @@
 
 JobsBot is a Telegram bot for job updates, deployed on AWS with an EC2 Auto Scaling Group behind an ALB and CloudFront, plus Lambda-based scraping/dispatch, DynamoDB storage, and a K3s GitOps observability stack (ArgoCD, Prometheus/Grafana, Elastic).
 
-![Architecture diagram](<PLACEHOLDER_ARCHITECTURE_IMAGE_URL>)
+![Architecture diagram](assets\images\architecture1.png)
 
 ## High-Level Architecture
 
@@ -100,15 +100,15 @@ Terraform is the source of truth for AWS resources and the observability stack. 
 
 **ArgoCD**
 
-![ArgoCD dashboard](<PLACEHOLDER_ARGOCD_DASHBOARD_IMAGE_URL>)
+![ArgoCD dashboard](assets\images\argocd1.png)
 
 **Grafana**
 
-![Grafana dashboard](<PLACEHOLDER_GRAFANA_DASHBOARD_IMAGE_URL>)
+![Grafana dashboard](assets\images\grafana1.png)
 
 **Kibana**
 
-![Kibana dashboard](<PLACEHOLDER_KIBANA_DASHBOARD_IMAGE_URL>)
+![Kibana dashboard](assets\images\kibana1.png)
 
 ## Telegram Bot
 

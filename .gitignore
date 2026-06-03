@@ -9,3 +9,4 @@ __pycache__/
 venv/
 *.tfvars
 terraform/kubeconfig.yaml
+Dashboards-backup/
